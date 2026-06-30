@@ -73,8 +73,8 @@ export function validateLinkedEvents(store: TtaiWebhookStore): {
     if (identity.callId) callIds.add(identity.callId);
   }
 
-  const sessionIdList = [...sessionIds];
-  const callIdList = [...callIds];
+  const sessionIdList = Array.from(sessionIds);
+  const callIdList = Array.from(callIds);
 
   return {
     ok: sessionIdList.length <= 1 && callIdList.length <= 1,

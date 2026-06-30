@@ -44,7 +44,7 @@ function domainLookupCandidates(domain: string): string[] {
     candidates.add(normalized.replace(/\.myshopify\.com$/, ""));
   }
 
-  return [...candidates];
+  return Array.from(candidates);
 }
 
 /** Resolve a Store row from Shopify webhook header or manual input. */
@@ -95,7 +95,7 @@ export function parseAlternateShopDomains(
     seen.add(normalized);
   }
 
-  return [...seen];
+  return Array.from(seen);
 }
 
 /** Combine manual + discovered *.myshopify.com hosts, excluding the primary domain. */
@@ -114,7 +114,7 @@ export function mergeAlternateShopDomains(
     seen.add(normalized);
   }
 
-  return [...seen];
+  return Array.from(seen);
 }
 
 /** Match store by domain alias, then by HMAC against any registered secret. */

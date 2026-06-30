@@ -300,7 +300,7 @@ export async function fetchShopMyshopifyAliases(
     addHost(domain.host);
   }
 
-  return [...hosts];
+  return Array.from(hosts);
 }
 
 export async function fetchShopifyAbandonedCheckouts(
@@ -457,8 +457,12 @@ function restCheckoutToNode(c: RestCheckoutRow): ShopifyAbandonedCheckoutNode {
       email: c.email ?? null,
       phone: c.phone ?? null,
     },
-    billingAddress: c.billing_address ?? null,
-    shippingAddress: c.shipping_address ?? null,
+    billingAddress: c.billing_address
+      ? { phone: c.billing_address.phone ?? null }
+      : null,
+    shippingAddress: c.shipping_address
+      ? { phone: c.shipping_address.phone ?? null }
+      : null,
     totalPriceSet: {
       shopMoney: {
         amount: c.total_price ?? "0",

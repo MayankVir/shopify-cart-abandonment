@@ -301,7 +301,7 @@ export function TtaiCallDetails({
         />
       )}
 
-      {(analyzed || extracted || completed || terminated) && (
+      {Boolean(analyzed || extracted || completed || terminated) && (
         <details className="rounded-md border border-border/60 bg-muted/20 p-3">
           <summary className="cursor-pointer text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Raw TTAI webhook payloads
