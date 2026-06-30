@@ -1,36 +1,87 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Shopify IVR Abandoned Cart Recovery
 
-## Getting Started
+Multi-tenant B2B platform replacing the Apps Script + Sheet workflow with Postgres, Shopify polling, and TTAI SIP dispatch.
 
-First, run the development server:
+## Recovery pipeline (replaces sheet + manual menus)
+
+On **Call now** or **auto-scheduled call**:
+
+1. **Storefront `cartCreate`** — rebuilds cart from line item variant IDs (deferred from poll/webhook)
+2. **uAgents `fetch-context`** — enriches order/user context (`UAGENTS_*` env)
+3. **TTAI `POST /v2/sip/call`** — dispatches SIP with `dynamic_vars` (`TT_API_*` env + per-store scenario/trunk)
+
+## Ingestion
+
+| Source | Purpose |
+|---|---|
+| **Poll** (every 5 min) | Lists open `abandonedCheckouts` from Shopify Admin GraphQL — no cart creation |
+| **Webhook** `/api/webhooks/checkout-update` | Fast phone/email/line-item updates (optional accelerator) |
+| **Auto-call** | Runs on each sync + `/api/cron/process-calls` for due checkouts |
+
+## Setup
 
 ```bash
+cp .env.example .env.local
+# Fill Supabase, Clerk, TT_API_KEY, UAGENTS_TOKEN, ENCRYPTION_KEY
+
+npx prisma db push --accept-data-loss
+npx prisma generate
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Required env (from Apps Script creds)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```env
+TT_API_KEY=          # was TT_API_KEY
+TT_ORG_ID=           # was TT_ORG_ID
+TT_BASE_URL=https://api.toughtongueai.com/api/public
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+UAGENTS_CUSTOMER_NAME=ttai
+UAGENTS_TOKEN=       # was UAGENTS_TOKEN
+UAGENTS_BASE_URL=https://uagents.val.run
 
-## Learn More
+TTAI_WEBHOOK_SECRET= # verify POST /api/webhooks/ttai
+CRON_SECRET=         # optional Bearer for /api/cron/process-calls
+```
 
-To learn more about Next.js, take a look at the following resources:
+Per-store **SIP scenario + trunk** are set in `/admin` (`ttaiScenarioId`, `ttaiTrunkId`).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Webhooks to register
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| URL | Purpose |
+|---|---|
+| `POST /api/webhooks/checkout-update` | Shopify checkout update (HMAC via store apiSecret) |
+| `POST /api/webhooks/ttai` | TTAI call completion → transcript, tool calls, status |
 
-## Deploy on Vercel
+### Cron (optional external scheduler)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  https://your-app.com/api/cron/process-calls
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Call status analytics
+
+| Category | Statuses |
+|---|---|
+| Pre-call failures | `CART_CREATE_FAILED`, `ENRICH_FAILED`, `DISPATCH_FAILED` |
+| Telephony outcomes | `NO_ANSWER`, `BUSY`, `INVALID_NUMBER`, `HANG_UP`, `VOICEMAIL` |
+| Success | `COMPLETED` |
+| In progress | `PREPARING`, `DISPATCHED` |
+
+Each attempt is stored in `CallAttempt` with transcript, tool calls JSON, failure stage/reason, and duration.
+
+## Project structure
+
+```
+lib/
+  recovery-pipeline.ts   # cart → uAgents → SIP orchestration
+  shopify-admin.ts       # abandonedCheckouts GraphQL poll
+  shopify.ts             # webhook + Storefront cartCreate
+  uagents.ts             # fetch-context enrichment
+  ttai.ts                # SIP dispatch + status mapping
+  phone.ts               # E.164 normalization
+  line-items.ts          # variant GID helpers
+app/api/webhooks/ttai/   # call completion callback
+app/api/cron/process-calls/
+```

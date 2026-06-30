@@ -1,0 +1,103 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum CheckoutSyncMode {
+  WEBHOOK
+  POLLING
+}
+
+model Store {
+  id               String              @id @default(uuid())
+  storeDomain      String              @unique
+  apiKey           String?
+  apiSecret        String?
+  adminAccessToken String
+  storefrontToken  String
+  callDelayMinutes Int                 @default(30)
+  sipConcurrency   Int                 @default(1)
+  checkoutSyncMode CheckoutSyncMode    @default(POLLING)
+  /** Other *.myshopify.com hosts for the same shop (Shopify sends webhooks on any of them). */
+  alternateShopDomains String[]        @default([])
+  ttaiScenarioId   String?
+  ttaiTrunkId      String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  checkouts        AbandonedCheckout[]
+}
+
+model AbandonedCheckout {
+  id                String        @id @default(uuid())
+  checkoutToken     String        @unique
+  shopifyCheckoutId String?       @unique
+  customerPhone     String        @default("")
+  customerEmail     String?
+  cartValue         Float         @default(0)
+  cartId            String        @default("")
+  checkoutUrl       String        @default("") @db.Text
+  recoveryUrl       String        @default("") @db.Text
+  lineItemsJson     Json          @default("[]")
+  orderContext      String        @default("") @db.Text
+  userContext       String        @default("") @db.Text
+  relatedItems      Json          @default("[]")
+  callScheduled     Boolean       @default(false)
+  scheduledCallAt   DateTime?
+  shopifyCreatedAt  DateTime?
+  callStatus        CallStatus    @default(PENDING)
+  lastError         String?       @db.Text
+  sessionId         String?
+  aiSummary         String?       @db.Text
+  storeDomain       String
+  store             Store         @relation(fields: [storeDomain], references: [storeDomain], onDelete: Cascade)
+  callAttempts      CallAttempt[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([storeDomain])
+  @@index([callStatus])
+  @@index([scheduledCallAt])
+}
+
+model CallAttempt {
+  id                  String            @id @default(uuid())
+  abandonedCheckoutId String
+  checkout            AbandonedCheckout @relation(fields: [abandonedCheckoutId], references: [id], onDelete: Cascade)
+  callId              String?
+  sessionId           String?
+  status              CallStatus        @default(PREPARING)
+  failureStage        String?
+  failureReason       String?           @db.Text
+  transcript          String?           @db.Text
+  toolCallsJson       Json              @default("[]")
+  dynamicVarsJson     Json              @default("{}")
+  trigger             String            @default("manual")
+  startedAt           DateTime          @default(now())
+  endedAt             DateTime?
+  durationSec         Int?
+
+  @@index([abandonedCheckoutId])
+  @@index([callId])
+  @@index([sessionId])
+  @@index([status])
+}
+
+enum CallStatus {
+  PENDING
+  PREPARING
+  DISPATCHED
+  COMPLETED
+  NO_ANSWER
+  BUSY
+  INVALID_NUMBER
+  HANG_UP
+  VOICEMAIL
+  CART_CREATE_FAILED
+  ENRICH_FAILED
+  DISPATCH_FAILED
+}
