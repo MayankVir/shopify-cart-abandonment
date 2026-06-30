@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import {
   AlertCircle,
   Clock,
-  ExternalLink,
   Loader2,
   Phone,
   PhoneOff,

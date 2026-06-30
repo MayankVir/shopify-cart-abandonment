@@ -348,7 +348,7 @@ export async function fetchShopifyAbandonedCheckouts(
         nodes,
         pageInfo: { hasNextPage: false, endCursor: null },
       };
-    } catch (restError) {
+    } catch {
       throw graphqlError;
     }
   }

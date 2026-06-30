@@ -53,7 +53,7 @@ function formatCallTime(iso: string): { primary: string; secondary: string } {
   const diffMs = now.getTime() - date.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-  let secondary = date.toLocaleTimeString([], {
+  const secondary = date.toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
   });

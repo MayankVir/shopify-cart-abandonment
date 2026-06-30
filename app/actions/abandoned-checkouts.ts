@@ -16,7 +16,6 @@ import {
   extractCheckoutPhone,
   fetchGrantedAdminScopes,
   fetchShopifyAbandonedCheckouts,
-  gidToCheckoutToken,
   isRetryableStatus,
   mapAdminLineItems,
   parseShopMoney,
