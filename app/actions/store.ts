@@ -4,7 +4,7 @@ import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import { CallStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { buildSessionSummary, fetchTtaiSessionDetails } from "@/lib/ttai";
+import { buildSessionSummary, fetchTtaiSessionDetails, durationSecFromTtaiSession } from "@/lib/ttai";
 import {
   attachSessionDetailsToStore,
   ensureTtaiWebhookStore,
@@ -257,9 +257,11 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
       }
     }
 
-    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/analytics");
+    revalidatePath("/dashboard/billing");
+    revalidatePath("/dashboard/recovery");
     revalidatePath("/dashboard/onboarding");
-    revalidatePath("/admin");
+    revalidatePath("/dashboard/admin");
 
     return {
       success: true,
@@ -438,9 +440,7 @@ export async function fetchTtaiSessionDetailsForCallLog(checkoutId: string): Pro
 
   const durationSec =
     attempt.durationSec ??
-    (sessionResult.session?.duration != null
-      ? Math.round(sessionResult.session.duration)
-      : undefined);
+    durationSecFromTtaiSession(sessionResult.session);
 
   await db.$transaction([
     db.callAttempt.update({
@@ -468,7 +468,8 @@ export async function fetchTtaiSessionDetailsForCallLog(checkoutId: string): Pro
     },
   });
 
-  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/analytics");
+  revalidatePath("/dashboard/billing");
 
   if (!sessionResult.success) {
     return {

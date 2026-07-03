@@ -123,6 +123,12 @@ function CheckoutDetail({
           {checkout.lastError}
         </p>
       )}
+      {checkout.draftOrderId && (
+        <p>
+          <span className="text-muted-foreground">Draft order: </span>
+          <span className="font-mono text-xs">{checkout.draftOrderName || checkout.draftOrderId}</span>
+        </p>
+      )}
       {checkout.checkoutUrl && (
         <p>
           <span className="text-muted-foreground">Live cart checkout: </span>
@@ -521,7 +527,8 @@ export function AbandonedCheckoutsPanel() {
               Abandoned Checkouts
             </CardTitle>
             <CardDescription>
-              Sync now pulls abandoned checkouts from Shopify Admin API.
+              Sync now pulls abandoned checkouts from your configured source
+              (Google Sheet or Shopify).
             </CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -533,7 +540,7 @@ export function AbandonedCheckoutsPanel() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setShowSettings((v) => !v)}
+              onClick={() => setShowSettings(true)}
             >
               <Settings2 className="mr-1 h-3 w-3" />
               Settings
@@ -553,9 +560,11 @@ export function AbandonedCheckoutsPanel() {
             </Button>
           </div>
         </div>
-        {showSettings && (
-          <RecoverySettings storeDomain={selectedStoreDomain} />
-        )}
+        <RecoverySettings
+          storeDomain={selectedStoreDomain}
+          open={showSettings}
+          onOpenChange={setShowSettings}
+        />
       </CardHeader>
       <CardContent>
         {syncWarning && (
@@ -576,8 +585,8 @@ export function AbandonedCheckoutsPanel() {
               {isSyncing
                 ? "Syncing checkouts…"
                 : syncWarning
-                  ? "No checkouts synced yet. Fix the Admin API issue above, then click Sync now."
-                  : "No open abandoned checkouts. Click Sync now to pull from Shopify Admin API."}
+                  ? "No checkouts synced yet. Fix the sync issue above, then click Sync now."
+                  : "No open abandoned checkouts. Click Sync now to pull from your sheet or Shopify."}
             </p>
           </div>
         ) : (

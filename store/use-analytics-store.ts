@@ -63,6 +63,7 @@ const FAILED_STATUSES: CallStatus[] = [
   CallStatus.HANG_UP,
   CallStatus.VOICEMAIL,
   CallStatus.CART_CREATE_FAILED,
+  CallStatus.DRAFT_CREATE_FAILED,
   CallStatus.ENRICH_FAILED,
   CallStatus.DISPATCH_FAILED,
 ];

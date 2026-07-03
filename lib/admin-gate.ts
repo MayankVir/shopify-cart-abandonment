@@ -33,7 +33,7 @@ export async function requireAdmin(): Promise<{
     null;
 
   if (!isAdminEmail(email)) {
-    redirect("/dashboard?error=unauthorized");
+    redirect("/dashboard/analytics?error=unauthorized");
   }
 
   return { userId, email: email! };

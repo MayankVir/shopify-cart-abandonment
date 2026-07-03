@@ -1,30 +1,5 @@
-import { getStoresForDashboard } from "@/app/actions/store";
-import { AbandonedCheckoutsPanel } from "@/components/dashboard/abandoned-checkouts-panel";
-import { CallLogPanel } from "@/components/dashboard/call-log-panel";
-import { DashboardHydrator } from "@/components/dashboard/dashboard-hydrator";
-import { MetricsGrid } from "@/components/dashboard/metrics-grid";
-import { StoreSelector } from "@/components/dashboard/store-selector";
+import { redirect } from "next/navigation";
 
-export default async function DashboardPage() {
-  const stores = await getStoresForDashboard();
-
-  return (
-    <div className="space-y-8">
-      <DashboardHydrator initialStores={stores} />
-
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Live Dashboard</h1>
-          <p className="mt-1 text-muted-foreground">
-            Monitor IVR call performance and abandoned cart recovery in real time
-          </p>
-        </div>
-        <StoreSelector stores={stores} />
-      </div>
-
-      <MetricsGrid />
-      <AbandonedCheckoutsPanel />
-      <CallLogPanel />
-    </div>
-  );
+export default function DashboardPage() {
+  redirect("/dashboard/analytics");
 }

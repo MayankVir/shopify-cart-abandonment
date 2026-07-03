@@ -11,6 +11,7 @@ datasource db {
 enum CheckoutSyncMode {
   WEBHOOK
   POLLING
+  SHEET
 }
 
 model Store {
@@ -23,6 +24,9 @@ model Store {
   callDelayMinutes Int                 @default(30)
   sipConcurrency   Int                 @default(1)
   checkoutSyncMode CheckoutSyncMode    @default(POLLING)
+  /** Public Google Sheet / CSV export URL for plugin abandoned-checkout rows. */
+  sheetUrl         String              @default("") @db.Text
+  lastSheetSyncAt  DateTime?
   /** Other *.myshopify.com hosts for the same shop (Shopify sends webhooks on any of them). */
   alternateShopDomains String[]        @default([])
   ttaiScenarioId   String?
@@ -41,6 +45,8 @@ model AbandonedCheckout {
   cartValue         Float         @default(0)
   cartId            String        @default("")
   checkoutUrl       String        @default("") @db.Text
+  draftOrderId      String        @default("")
+  draftOrderName    String        @default("")
   recoveryUrl       String        @default("") @db.Text
   lineItemsJson     Json          @default("[]")
   orderContext      String        @default("") @db.Text
@@ -98,6 +104,7 @@ enum CallStatus {
   HANG_UP
   VOICEMAIL
   CART_CREATE_FAILED
+  DRAFT_CREATE_FAILED
   ENRICH_FAILED
   DISPATCH_FAILED
 }

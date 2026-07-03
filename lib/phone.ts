@@ -5,6 +5,9 @@ export function normalizePhoneNumber(value: string | null | undefined): string {
     .trim()
     .replace(/[\s().-]/g, "");
   if (!cleaned) return "";
+  if (/^[6-9]\d{9}$/.test(cleaned)) {
+    return `+91${cleaned}`;
+  }
   const normalized = cleaned.startsWith("00")
     ? `+${cleaned.slice(2)}`
     : cleaned.startsWith("+")

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { Webhook } from "standardwebhooks";
 import { db } from "@/lib/db";
-import { mapTtaiStatusToCallStatus, buildSessionSummary, fetchTtaiSessionDetails } from "@/lib/ttai";
+import { mapTtaiStatusToCallStatus, buildSessionSummary, fetchTtaiSessionDetails, durationSecFromTtaiSession } from "@/lib/ttai";
 import {
   asRecord,
   attachSessionDetailsToStore,
@@ -244,7 +244,7 @@ export async function POST(request: NextRequest) {
       dataForExtraction.duration_sec,
       dataForExtraction.duration_seconds,
       payload.duration_sec,
-      finalWebhookStore.sessionDetails?.duration
+      durationSecFromTtaiSession(finalWebhookStore.sessionDetails)
     ) ??
     (endedAt
       ? Math.round((endedAt.getTime() - attempt.startedAt.getTime()) / 1000)

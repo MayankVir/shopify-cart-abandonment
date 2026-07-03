@@ -20,15 +20,27 @@ export const STATUS_VARIANT: Record<CallStatus, BadgeVariant> = {
   HANG_UP: "secondary",
   VOICEMAIL: "warning",
   CART_CREATE_FAILED: "destructive",
+  DRAFT_CREATE_FAILED: "destructive",
   ENRICH_FAILED: "destructive",
   DISPATCH_FAILED: "destructive",
 };
 
-export const FAILURE_STATUSES: CallStatus[] = [
+/** Pre-call pipeline failures — kept on CallAttempt, not on AbandonedCheckout. */
+export const PRE_CALL_FAILURE_STATUSES: CallStatus[] = [
   CallStatus.CART_CREATE_FAILED,
+  CallStatus.DRAFT_CREATE_FAILED,
   CallStatus.ENRICH_FAILED,
   CallStatus.DISPATCH_FAILED,
 ];
+
+export const FAILURE_STATUSES: CallStatus[] = [...PRE_CALL_FAILURE_STATUSES];
+
+const STATUS_LABELS: Partial<Record<CallStatus, string>> = {
+  DRAFT_CREATE_FAILED: "Draft prep failed",
+  CART_CREATE_FAILED: "Cart prep failed",
+  ENRICH_FAILED: "Enrichment failed",
+  DISPATCH_FAILED: "Dispatch failed",
+};
 
 export const TERMINAL_FAILURE_STATUSES: CallStatus[] = [
   CallStatus.NO_ANSWER,
@@ -40,7 +52,7 @@ export const TERMINAL_FAILURE_STATUSES: CallStatus[] = [
 ];
 
 export function formatCallStatus(status: CallStatus): string {
-  return status.replace(/_/g, " ");
+  return STATUS_LABELS[status] ?? status.replace(/_/g, " ");
 }
 
 export function isActiveCall(status: CallStatus): boolean {

@@ -1,11 +1,13 @@
 "use server";
 
 import { auth } from "@clerk/nextjs/server";
-import { CallStatus, Prisma } from "@prisma/client";
+import { CallStatus, CheckoutSyncMode, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
+import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
 import {
   type CheckoutSyncModeValue,
   isCheckoutSyncMode,
+  CHECKOUT_SYNC_MODES,
 } from "@/lib/checkout-sync-mode";
 import { getLastWebhookDebug, type WebhookDebugInfo } from "@/lib/store-domain";
 import { db } from "@/lib/db";
@@ -35,6 +37,7 @@ import {
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
 import { canStopCall } from "@/lib/call-status";
+import { syncAbandonedCheckoutsFromSheet } from "@/lib/sheet-sync";
 
 const ARCHIVED_IN_SHOPIFY_MESSAGE = "Archived in Shopify admin";
 
@@ -72,6 +75,8 @@ export interface AbandonedCheckoutRow {
   cartValue: number;
   cartId: string;
   checkoutUrl: string;
+  draftOrderId: string;
+  draftOrderName: string;
   recoveryUrl: string;
   callScheduled: boolean;
   scheduledCallAt: string | null;
@@ -87,7 +92,7 @@ export interface SyncResult {
   success: boolean;
   checkouts: AbandonedCheckoutRow[];
   syncedAt: string;
-  syncMode?: "graphql" | "rest" | "webhook-only";
+  syncMode?: "graphql" | "rest" | "webhook-only" | "sheet";
   warning?: string;
   autoCalls?: { processed: number; errors: number };
   adminTokenSource?: string;
@@ -149,6 +154,8 @@ function toRow(
     cartValue: c.cartValue,
     cartId: c.cartId,
     checkoutUrl: c.checkoutUrl,
+    draftOrderId: c.draftOrderId,
+    draftOrderName: c.draftOrderName,
     recoveryUrl: c.recoveryUrl,
     callScheduled: c.callScheduled,
     scheduledCallAt: c.scheduledCallAt?.toISOString() ?? null,
@@ -162,6 +169,14 @@ function toRow(
 }
 
 async function fetchOpenCheckouts(storeDomain: string, page = 0) {
+  await db.abandonedCheckout.updateMany({
+    where: {
+      storeDomain,
+      callStatus: { in: PRE_CALL_FAILURE_STATUSES },
+    },
+    data: { callStatus: CallStatus.PENDING },
+  });
+
   const pageSize = ABANDONED_CHECKOUTS_PAGE_SIZE;
   const skip = page * pageSize;
   const where = {
@@ -250,6 +265,38 @@ export async function syncAbandonedCheckouts(
   }
 
   try {
+    if (store.checkoutSyncMode === CheckoutSyncMode.SHEET) {
+      const sheetResult = await syncAbandonedCheckoutsFromSheet(store);
+      const autoCalls = await processScheduledCallsForStore(storeDomain);
+      const dbPage = options.dbPage ?? 0;
+      const pageResult = await fetchOpenCheckouts(storeDomain, dbPage);
+
+      console.info(
+        "[sheet] abandoned checkouts synced",
+        JSON.stringify({
+          storeDomain,
+          synced: sheetResult.synced,
+          skipped: sheetResult.skipped,
+        })
+      );
+
+      return {
+        success: true,
+        checkouts: pageResult.checkouts,
+        syncedAt: new Date().toISOString(),
+        syncMode: "sheet",
+        warning:
+          sheetResult.skipped > 0
+            ? `${sheetResult.skipped} sheet row(s) skipped (missing variant IDs).`
+            : undefined,
+        autoCalls,
+        pageSize: pageResult.pageSize,
+        page: pageResult.page,
+        hasMore: pageResult.hasMore,
+        totalCount: pageResult.totalCount,
+      };
+    }
+
     let shopifyNodes: Awaited<
       ReturnType<typeof fetchShopifyAbandonedCheckouts>
     >["nodes"] = [];
@@ -403,7 +450,12 @@ export async function syncAbandonedCheckouts(
 
 export async function initiateRecoveryCall(
   checkoutId: string
-): Promise<{ success: boolean; error?: string; checkoutUrl?: string }> {
+): Promise<{
+  success: boolean;
+  error?: string;
+  checkoutUrl?: string;
+  draftOrderId?: string;
+}> {
   const { userId } = await auth();
   if (!userId) {
     return { success: false, error: "Unauthorized" };
@@ -439,12 +491,15 @@ export async function initiateRecoveryCall(
   }
 
   const result = await runRecoveryCallPipeline(fresh, "manual");
-  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/analytics");
+  revalidatePath("/dashboard/billing");
+  revalidatePath("/dashboard/recovery");
 
   return {
     success: result.success,
     error: result.error,
     checkoutUrl: result.checkoutUrl,
+    draftOrderId: result.draftOrderId,
   };
 }
 
@@ -465,7 +520,9 @@ export async function stopRecoveryCallAction(
   }
 
   const result = await stopRecoveryCall(checkout);
-  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/analytics");
+  revalidatePath("/dashboard/billing");
+  revalidatePath("/dashboard/recovery");
 
   return result;
 }
@@ -532,7 +589,9 @@ export async function bulkStopRecoveryCallAction(
     }
   }
 
-  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/analytics");
+  revalidatePath("/dashboard/billing");
+  revalidatePath("/dashboard/recovery");
 
   return {
     success: stopped > 0,
@@ -592,9 +651,11 @@ export async function updateStoreCheckoutSyncMode(
   try {
     await db.store.update({
       where: { storeDomain },
-      data: { checkoutSyncMode: mode },
+      data: { checkoutSyncMode: mode as CheckoutSyncMode },
     });
-    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/analytics");
+  revalidatePath("/dashboard/billing");
+  revalidatePath("/dashboard/recovery");
     return { success: true };
   } catch (error) {
     return {
@@ -615,10 +676,52 @@ export async function getStoreRecoverySettings(storeDomain: string) {
       callDelayMinutes: true,
       sipConcurrency: true,
       checkoutSyncMode: true,
+      sheetUrl: true,
+      lastSheetSyncAt: true,
       ttaiScenarioId: true,
       ttaiTrunkId: true,
     },
   });
+}
+
+export async function updateStoreSheetSettings(
+  storeDomain: string,
+  input: { sheetUrl: string; checkoutSyncMode?: CheckoutSyncModeValue }
+): Promise<{ success: boolean; error?: string }> {
+  const { userId } = await auth();
+  if (!userId) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  const sheetUrl = input.sheetUrl.trim();
+  const mode = input.checkoutSyncMode;
+
+  if (mode && !isCheckoutSyncMode(mode)) {
+    return { success: false, error: "Invalid sync mode" };
+  }
+
+  if (mode === CHECKOUT_SYNC_MODES.SHEET && !sheetUrl) {
+    return { success: false, error: "Sheet URL is required for sheet sync mode" };
+  }
+
+  try {
+    await db.store.update({
+      where: { storeDomain },
+      data: {
+        sheetUrl,
+        ...(mode ? { checkoutSyncMode: mode as CheckoutSyncMode } : {}),
+      },
+    });
+    revalidatePath("/dashboard/analytics");
+  revalidatePath("/dashboard/billing");
+  revalidatePath("/dashboard/recovery");
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to save sheet settings",
+    };
+  }
 }
 
 export async function updateStoreRecoverySettings(
@@ -651,7 +754,9 @@ export async function updateStoreRecoverySettings(
     data: { callDelayMinutes, sipConcurrency: concurrency },
   });
 
-  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/analytics");
+  revalidatePath("/dashboard/billing");
+  revalidatePath("/dashboard/recovery");
   return { success: true };
 }
 

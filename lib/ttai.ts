@@ -5,6 +5,7 @@ const DEFAULT_TT_BASE_URL = "https://api.toughtongueai.com/api/public";
 export interface SipDynamicVars {
   order_id: string;
   phone_number: string;
+  customer_phone?: string;
   abandoned_ts?: string;
   cart_value?: string;
   order_context?: string;
@@ -12,6 +13,9 @@ export interface SipDynamicVars {
   related_items?: string;
   cart_id?: string;
   checkout_url?: string;
+  draft_order_id?: string;
+  draft_order_name?: string;
+  draft_order_context?: string;
 }
 
 export interface DispatchSipCallParams {
@@ -66,7 +70,11 @@ export interface TtaiSessionDetails {
   status?: string;
   user_name?: string;
   user_email?: string;
+  /** Session length in seconds (TTAI sessions API). */
   duration?: number;
+  /** Alternate field from enriched session list / session details. */
+  duration_seconds?: number;
+  /** Session length in minutes (TTAI sessions API — primary billing field). */
   duration_minutes?: number;
   transcript_url?: string;
   evaluation_results?: TtaiEvaluationResults | null;
@@ -78,6 +86,62 @@ export interface FetchTtaiSessionDetailsResult {
   success: boolean;
   session?: TtaiSessionDetails;
   error?: string;
+}
+
+export interface TtaiScenarioAnalytics {
+  scenario_id: string;
+  scenario_name: string;
+  total_sessions: number;
+  avg_duration_minutes: number;
+  avg_score?: number;
+}
+
+export interface TtaiOrgDashboardSummary {
+  total_sessions: number;
+  total_minutes: number;
+  active_members: number;
+}
+
+export interface TtaiUsageByMember {
+  user_email: string;
+  user_name: string;
+  session_count: number;
+  total_minutes: number;
+}
+
+export interface TtaiAnalyticsTimeSeriesPoint {
+  date: string;
+  sessions: number;
+  minutes: number;
+}
+
+export interface TtaiOrgDashboard {
+  summary: TtaiOrgDashboardSummary;
+  usage_by_member: TtaiUsageByMember[];
+  time_series: TtaiAnalyticsTimeSeriesPoint[];
+}
+
+export interface TtaiMemberUsage {
+  session_count: number;
+  total_minutes: number;
+}
+
+export interface TtaiUnifiedAnalytics {
+  scenarios: TtaiScenarioAnalytics[];
+  org_dashboard?: TtaiOrgDashboard;
+  member_usage?: TtaiMemberUsage;
+}
+
+export interface FetchTtaiUnifiedAnalyticsResult {
+  success: boolean;
+  data?: TtaiUnifiedAnalytics;
+  error?: string;
+}
+
+export interface FetchTtaiUnifiedAnalyticsParams {
+  isOrg?: boolean;
+  startDate?: string;
+  endDate?: string;
 }
 
 function getTTApiBaseUrl(): string {
@@ -226,7 +290,7 @@ export async function cancelSipCall(callId: string): Promise<CancelSipCallResult
   return { success: true, deleted: parsed.deleted ?? true };
 }
 
-/** GET /sessions/{session_id} — transcript URL, evaluation, improvement data. */
+/** GET /sessions/{session_id} — see https://app.toughtongueai.com/docs/api-reference/sessions/ */
 export async function fetchTtaiSessionDetails(
   sessionId: string
 ): Promise<FetchTtaiSessionDetailsResult> {
@@ -276,6 +340,83 @@ export async function fetchTtaiSessionDetails(
   return { success: true, session: parsed };
 }
 
+/**
+ * Resolve billable session length in seconds from TTAI session details.
+ * Prefers duration_seconds, then duration, then duration_minutes.
+ */
+export function durationSecFromTtaiSession(
+  session: TtaiSessionDetails | null | undefined
+): number | undefined {
+  if (!session) return undefined;
+
+  if (session.duration_seconds != null && session.duration_seconds > 0) {
+    return Math.round(session.duration_seconds);
+  }
+  if (session.duration != null && session.duration > 0) {
+    return Math.round(session.duration);
+  }
+  if (session.duration_minutes != null && session.duration_minutes > 0) {
+    return Math.round(session.duration_minutes * 60);
+  }
+
+  return undefined;
+}
+
+/** GET /v2/analytics — unified org/scenario analytics. */
+export async function fetchTtaiUnifiedAnalytics(
+  params: FetchTtaiUnifiedAnalyticsParams = {}
+): Promise<FetchTtaiUnifiedAnalyticsResult> {
+  if (!isTTaiConfigured()) {
+    return { success: false, error: "TT_API_KEY not configured" };
+  }
+
+  const cfg = getTTApiConfig();
+  const search = new URLSearchParams();
+  if (params.isOrg) search.set("is_org", "true");
+  if (params.startDate) search.set("start_date", params.startDate);
+  if (params.endDate) search.set("end_date", params.endDate);
+
+  const query = search.toString();
+  const url = `${cfg.baseUrl}/v2/analytics${query ? `?${query}` : ""}`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: cfg.headers,
+    cache: "no-store",
+  });
+
+  const body = await response.text();
+  let parsed: TtaiUnifiedAnalytics & { detail?: string; message?: string };
+
+  try {
+    parsed = JSON.parse(body) as typeof parsed;
+  } catch {
+    return {
+      success: false,
+      error: `TTAI analytics: invalid JSON (HTTP ${response.status})`,
+    };
+  }
+
+  if (response.status < 200 || response.status >= 300) {
+    return {
+      success: false,
+      error:
+        parsed.detail ||
+        parsed.message ||
+        `TTAI analytics HTTP ${response.status}`,
+    };
+  }
+
+  return { success: true, data: parsed };
+}
+
+export function scenarioTotalMinutes(scenario: TtaiScenarioAnalytics): number {
+  return (
+    Math.round(scenario.total_sessions * scenario.avg_duration_minutes * 10) /
+    10
+  );
+}
+
 export function buildSessionSummary(session: TtaiSessionDetails): string | undefined {
   const evaluation = session.evaluation_results;
   if (evaluation?.detailed_feedback?.trim()) {
@@ -319,10 +460,14 @@ export function buildSipDynamicVars(input: {
   relatedItems?: unknown[];
   cartId?: string;
   checkoutUrl?: string;
+  draftOrderId?: string;
+  draftOrderName?: string;
+  draftOrderContext?: string;
 }): SipDynamicVars {
   const vars: SipDynamicVars = {
     order_id: input.orderId,
     phone_number: input.phone,
+    customer_phone: input.phone,
   };
   if (input.abandonedTs) vars.abandoned_ts = input.abandonedTs;
   if (input.cartValue != null) vars.cart_value = String(input.cartValue);
@@ -333,6 +478,9 @@ export function buildSipDynamicVars(input: {
   }
   if (input.cartId) vars.cart_id = input.cartId;
   if (input.checkoutUrl) vars.checkout_url = input.checkoutUrl;
+  if (input.draftOrderId) vars.draft_order_id = input.draftOrderId;
+  if (input.draftOrderName) vars.draft_order_name = input.draftOrderName;
+  if (input.draftOrderContext) vars.draft_order_context = input.draftOrderContext;
   return vars;
 }
 

@@ -1,12 +1,19 @@
-import { Prisma, CallStatus, type AbandonedCheckout, type Store } from "@prisma/client";
+import { CheckoutSyncMode, Prisma, CallStatus, type AbandonedCheckout, type Store } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   type LineItemRecord,
   lineItemsHaveVariantId,
 } from "@/lib/line-items";
 import { normalizePhoneNumber } from "@/lib/phone";
+import {
+  createDraftOrderForStore,
+  getDraftOrderContextForStore,
+  hasDraftOrderId,
+  serializeDraftOrderContext,
+} from "@/lib/shopify-draft-orders";
 import { createStorefrontCart } from "@/lib/shopify";
 import { fetchUAgentsContext, isUAgentsConfigured } from "@/lib/uagents";
+import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
 import { buildSipDynamicVars, cancelSipCall, dispatchSipCall } from "@/lib/ttai";
 
 export type RecoveryTrigger = "manual" | "auto";
@@ -16,12 +23,40 @@ export interface RecoveryPipelineResult {
   error?: string;
   callAttemptId?: string;
   checkoutUrl?: string;
+  draftOrderId?: string;
 }
 
 function parseLineItems(json: Prisma.JsonValue): LineItemRecord[] {
   if (!Array.isArray(json)) return [];
   return json as unknown as LineItemRecord[];
 }
+
+function sheetContextFromUserContext(userContext: string): {
+  customerName?: string;
+  shippingAddress?: CreateDraftOrderShipping | null;
+} {
+  if (!userContext.trim()) return {};
+  try {
+    const parsed = JSON.parse(userContext) as {
+      customer_name?: string;
+      shipping_address?: CreateDraftOrderShipping | null;
+    };
+    return {
+      customerName: parsed.customer_name,
+      shippingAddress: parsed.shipping_address ?? null,
+    };
+  } catch {
+    return {};
+  }
+}
+
+type CreateDraftOrderShipping = {
+  address1: string;
+  zip: string;
+  province: string;
+  countryCode: string;
+  city?: string;
+};
 
 async function markFailure(
   checkoutId: string,
@@ -30,6 +65,8 @@ async function markFailure(
   stage: string,
   reason: string
 ) {
+  const resetCheckout = PRE_CALL_FAILURE_STATUSES.includes(status);
+
   await db.$transaction([
     db.callAttempt.update({
       where: { id: attemptId },
@@ -43,8 +80,11 @@ async function markFailure(
     db.abandonedCheckout.update({
       where: { id: checkoutId },
       data: {
-        callStatus: status,
+        callStatus: resetCheckout ? CallStatus.PENDING : status,
         lastError: reason,
+        ...(status === CallStatus.DRAFT_CREATE_FAILED
+          ? { draftOrderId: "", draftOrderName: "" }
+          : {}),
       },
     }),
   ]);
@@ -88,60 +128,146 @@ export async function runRecoveryCallPipeline(
     },
   });
 
+  const useSheetFlow = checkout.store.checkoutSyncMode === CheckoutSyncMode.SHEET;
   let cartId = checkout.cartId;
   let checkoutUrl = checkout.checkoutUrl;
+  let draftOrderId = checkout.draftOrderId;
+  let draftOrderName = checkout.draftOrderName;
   const lineItems = parseLineItems(checkout.lineItemsJson);
+  const sheetCtx = sheetContextFromUserContext(checkout.userContext);
+  const hasVariants = lineItemsHaveVariantId(lineItems);
+  // Sheet flow always creates a fresh draft per call; poll/webhook reuses an existing one.
+  const shouldCreateDraft =
+    hasVariants && (useSheetFlow || !hasDraftOrderId(draftOrderId));
 
   try {
-    if (!cartId && lineItemsHaveVariantId(lineItems)) {
-      const cart = await createStorefrontCart(
-        checkout.storeDomain,
-        checkout.store.storefrontToken,
-        {
-          lineItems,
-          phone,
-          email: checkout.customerEmail ?? undefined,
-        }
-      );
+    if (shouldCreateDraft) {
+      const draft = await createDraftOrderForStore(checkout.store, {
+        lineItems,
+        phone,
+        email: checkout.customerEmail ?? undefined,
+        checkoutToken: checkout.checkoutToken,
+        customerName: sheetCtx.customerName,
+        shippingAddress: sheetCtx.shippingAddress,
+      });
 
-      if (!cart) {
-        await markFailure(
-          checkout.id,
-          attempt.id,
-          CallStatus.CART_CREATE_FAILED,
-          "cart_create",
-          "No variant IDs available to rebuild cart"
-        );
-        return { success: false, error: "Cannot create cart — no variant IDs on line items" };
-      }
-
-      cartId = cart.cartId;
-      checkoutUrl = cart.checkoutUrl;
+      draftOrderId = draft.draftOrderId;
+      draftOrderName = draft.draftOrderName;
 
       await db.abandonedCheckout.update({
         where: { id: checkout.id },
-        data: { cartId, checkoutUrl },
+        data: { draftOrderId, draftOrderName },
       });
-    } else if (!cartId && !lineItemsHaveVariantId(lineItems)) {
+    } else if (!hasDraftOrderId(draftOrderId) && !hasVariants) {
+      await markFailure(
+        checkout.id,
+        attempt.id,
+        CallStatus.DRAFT_CREATE_FAILED,
+        "draft_create",
+        "Line items missing variant IDs for draft order"
+      );
+      return {
+        success: false,
+        error: "Line items missing variant IDs for draft order",
+      };
+    }
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : "Draft order creation failed";
+    await markFailure(
+      checkout.id,
+      attempt.id,
+      CallStatus.DRAFT_CREATE_FAILED,
+      "draft_create",
+      reason
+    );
+    return { success: false, error: reason };
+  }
+
+  if (useSheetFlow && !hasDraftOrderId(draftOrderId)) {
+    const reason = "Draft order is required before calling (sheet mode)";
+    await markFailure(
+      checkout.id,
+      attempt.id,
+      CallStatus.DRAFT_CREATE_FAILED,
+      "draft_create",
+      reason
+    );
+    return { success: false, error: reason };
+  }
+
+  let draftOrderContextJson = "";
+  if (hasDraftOrderId(draftOrderId)) {
+    try {
+      const draftContext = await getDraftOrderContextForStore(
+        checkout.store,
+        draftOrderId
+      );
+      draftOrderContextJson = serializeDraftOrderContext(draftContext);
+      if (!draftOrderName && typeof draftContext.name === "string") {
+        draftOrderName = draftContext.name;
+      }
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : "Failed to fetch draft order";
+      await markFailure(
+        checkout.id,
+        attempt.id,
+        CallStatus.DRAFT_CREATE_FAILED,
+        "draft_fetch",
+        reason
+      );
+      return { success: false, error: reason };
+    }
+  }
+
+  if (!useSheetFlow) {
+    try {
+      if (!cartId && lineItemsHaveVariantId(lineItems)) {
+        const cart = await createStorefrontCart(
+          checkout.storeDomain,
+          checkout.store.storefrontToken,
+          {
+            lineItems,
+            phone,
+            email: checkout.customerEmail ?? undefined,
+          }
+        );
+
+        if (!cart) {
+          await markFailure(
+            checkout.id,
+            attempt.id,
+            CallStatus.CART_CREATE_FAILED,
+            "cart_create",
+            "No variant IDs available to rebuild cart"
+          );
+          return {
+            success: false,
+            error: "Cannot create cart — no variant IDs on line items",
+          };
+        }
+
+        cartId = cart.cartId;
+        checkoutUrl = cart.checkoutUrl;
+
+        await db.abandonedCheckout.update({
+          where: { id: checkout.id },
+          data: { cartId, checkoutUrl },
+        });
+      }
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : "Cart creation failed";
       await markFailure(
         checkout.id,
         attempt.id,
         CallStatus.CART_CREATE_FAILED,
         "cart_create",
-        "Line items missing variant IDs"
+        reason
       );
-      return { success: false, error: "Line items missing variant IDs for cart rebuild" };
+      return { success: false, error: reason };
     }
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "Cart creation failed";
-    await markFailure(
-      checkout.id,
-      attempt.id,
-      CallStatus.CART_CREATE_FAILED,
-      "cart_create",
-      reason
-    );
-    return { success: false, error: reason };
   }
 
   let orderContext = checkout.orderContext;
@@ -166,7 +292,8 @@ export async function runRecoveryCallPipeline(
         },
       });
     } catch (error) {
-      const reason = error instanceof Error ? error.message : "uAgents enrichment failed";
+      const reason =
+        error instanceof Error ? error.message : "uAgents enrichment failed";
       await markFailure(
         checkout.id,
         attempt.id,
@@ -189,8 +316,11 @@ export async function runRecoveryCallPipeline(
     orderContext,
     userContext,
     relatedItems,
-    cartId,
-    checkoutUrl,
+    cartId: useSheetFlow ? undefined : cartId,
+    checkoutUrl: useSheetFlow ? undefined : checkoutUrl,
+    draftOrderId,
+    draftOrderName,
+    draftOrderContext: draftOrderContextJson || undefined,
   });
 
   const sipResult = await dispatchSipCall({
@@ -235,7 +365,8 @@ export async function runRecoveryCallPipeline(
   return {
     success: true,
     callAttemptId: attempt.id,
-    checkoutUrl,
+    checkoutUrl: useSheetFlow ? undefined : checkoutUrl,
+    draftOrderId,
   };
 }
 

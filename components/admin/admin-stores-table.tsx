@@ -31,10 +31,7 @@ interface AdminStoresTableProps {
 export function AdminStoresTable({ stores }: AdminStoresTableProps) {
   const [isPending, startTransition] = useTransition();
 
-  function handleUpdate(
-    storeDomain: string,
-    form: HTMLFormElement
-  ) {
+  function handleUpdate(storeDomain: string, form: HTMLFormElement) {
     const formData = new FormData(form);
     const ttaiScenarioId = String(formData.get("ttaiScenarioId") ?? "");
     const ttaiTrunkId = String(formData.get("ttaiTrunkId") ?? "");
@@ -43,7 +40,7 @@ export function AdminStoresTable({ stores }: AdminStoresTableProps) {
       const result = await updateStoreTtaiBindings(
         storeDomain,
         ttaiScenarioId,
-        ttaiTrunkId
+        ttaiTrunkId,
       );
 
       if (!result.success) {
