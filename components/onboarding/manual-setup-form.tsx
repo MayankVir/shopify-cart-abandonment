@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import { KeyRound, Loader2 } from "lucide-react";
 import {
   saveManualStoreConfig,
-  lookupShopAlternateDomains,
   getStoreDomainsForManualSetup,
   getManualStoreConfig,
 } from "@/app/actions/store";
@@ -35,10 +34,8 @@ interface ManualSetupFormProps {
 
 const EMPTY_FORM = {
   storeDomain: "",
-  alternateShopDomains: "",
   apiKey: "",
   apiSecret: "",
-  adminAccessToken: "",
   storefrontToken: "",
 };
 
@@ -49,7 +46,6 @@ export function ManualSetupForm({ initialStoreDomain }: ManualSetupFormProps) {
   const [selectedDomain, setSelectedDomain] = useState(initialStoreDomain ?? "");
   const [form, setForm] = useState(EMPTY_FORM);
   const [isEditing, setIsEditing] = useState(false);
-  const [isLookingUpDomains, setIsLookingUpDomains] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -110,44 +106,12 @@ export function ManualSetupForm({ initialStoreDomain }: ManualSetupFormProps) {
     setIsLoading(false);
   }
 
-  function updateField(field: keyof typeof form, value: string) {
-    setForm((prev) => ({ ...prev, [field]: value }));
-  }
-
-  async function handleStoreDomainBlur() {
-    const hasClientCreds = Boolean(form.apiKey.trim() && form.apiSecret.trim());
-    const hasShpat = form.adminAccessToken.startsWith("shpat_");
-    if (!form.storeDomain.trim() || (!hasClientCreds && !hasShpat)) {
-      return;
-    }
-
-    setIsLookingUpDomains(true);
-    try {
-      const result = await lookupShopAlternateDomains(form.storeDomain, {
-        apiKey: form.apiKey,
-        apiSecret: form.apiSecret,
-        adminAccessToken: form.adminAccessToken,
-      });
-      if (result.error) return;
-      if (result.domains.length === 0) return;
-
-      updateField("alternateShopDomains", result.domains.join(", "));
-      toast.info(
-        `Found webhook domain${result.domains.length > 1 ? "s" : ""}: ${result.domains.join(", ")}`
-      );
-    } finally {
-      setIsLookingUpDomains(false);
-    }
-  }
-
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData();
     formData.set("storeDomain", form.storeDomain);
-    formData.set("alternateShopDomains", form.alternateShopDomains);
     formData.set("apiKey", form.apiKey);
     formData.set("apiSecret", form.apiSecret);
-    formData.set("adminAccessToken", form.adminAccessToken);
     formData.set("storefrontToken", form.storefrontToken);
 
     startTransition(async () => {
@@ -172,6 +136,10 @@ export function ManualSetupForm({ initialStoreDomain }: ManualSetupFormProps) {
       router.push("/dashboard");
       router.refresh();
     });
+  }
+
+  function updateField(field: keyof typeof form, value: string) {
+    setForm((prev) => ({ ...prev, [field]: value }));
   }
 
   return (
@@ -223,29 +191,9 @@ export function ManualSetupForm({ initialStoreDomain }: ManualSetupFormProps) {
                 name="storeDomain"
                 value={form.storeDomain}
                 onChange={(e) => updateField("storeDomain", e.target.value)}
-                onBlur={() => void handleStoreDomainBlur()}
                 placeholder="your-store.myshopify.com"
                 required
               />
-              {isLookingUpDomains && (
-                <p className="text-xs text-muted-foreground">Looking up Shopify domains…</p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="alternate-domains">Alternate shop domains (optional)</Label>
-              <Input
-                id="alternate-domains"
-                name="alternateShopDomains"
-                value={form.alternateShopDomains}
-                onChange={(e) => updateField("alternateShopDomains", e.target.value)}
-                placeholder="Auto-filled from Shopify when you save"
-              />
-              <p className="text-xs text-muted-foreground">
-                Filled automatically from Shopify when you save (or tab out of Store Domain if{" "}
-                <code>shpat_</code> is set). Shopify may webhook as{" "}
-                <code>ya0v1y-eg.myshopify.com</code> even when your primary is{" "}
-                <code>mayankvirmanitest.myshopify.com</code>.
-              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="api-key">Client ID (Dev Dashboard)</Label>
@@ -271,37 +219,28 @@ export function ManualSetupForm({ initialStoreDomain }: ManualSetupFormProps) {
                 autoComplete="off"
               />
               <p className="text-xs text-muted-foreground">
-                Used for <strong>polling</strong> (client-credentials token exchange). For{" "}
+                Used for client-credentials token exchange — Admin API access is obtained
+                automatically (short-lived, cached on the server). For{" "}
                 <strong>Settings → Notifications</strong> webhooks, webhook HMAC may use a
                 different signing key at the bottom of that page.
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="admin-token">Admin Access Token (shpat_, optional)</Label>
-              <PasswordInput
-                id="admin-token"
-                name="adminAccessToken"
-                value={form.adminAccessToken}
-                onChange={(e) => updateField("adminAccessToken", e.target.value)}
-                placeholder="Leave empty — polling uses Client ID + shpss_"
-                autoComplete="off"
-              />
-              <p className="text-xs text-muted-foreground">
-                Optional. If empty, polling exchanges Client ID + <code>shpss_</code> for a
-                short-lived Admin token (~24h, cached in memory on the server).
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="storefront-token">Storefront Public API Token</Label>
+              <Label htmlFor="storefront-token">
+                Storefront Public API Token (optional)
+              </Label>
               <PasswordInput
                 id="storefront-token"
                 name="storefrontToken"
                 value={form.storefrontToken}
                 onChange={(e) => updateField("storefrontToken", e.target.value)}
-                placeholder="Public storefront access token"
-                required
+                placeholder="Only needed for poll/webhook cart rebuild"
                 autoComplete="off"
               />
+              <p className="text-xs text-muted-foreground">
+                Not required for Google Sheet + draft order recovery. Leave empty if you only
+                sync from a sheet and create draft orders on call.
+              </p>
             </div>
             <Button type="submit" disabled={isPending} className="w-full">
               {isPending ? (

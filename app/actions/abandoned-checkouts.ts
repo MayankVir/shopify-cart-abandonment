@@ -102,7 +102,14 @@ export interface SyncResult {
   hasMore?: boolean;
   totalCount?: number;
   shopifyPageInfo?: AbandonedCheckoutsPageInfo;
+  sheetPageInfo?: SheetPageInfo;
   error?: string;
+}
+
+export interface SheetPageInfo {
+  page: number;
+  hasNextPage: boolean;
+  pageSize: number;
 }
 
 export interface PaginatedCheckoutsResult {
@@ -118,6 +125,7 @@ export interface PaginatedCheckoutsResult {
 export interface SyncOptions {
   shopifyAfter?: string | null;
   dbPage?: number;
+  sheetPage?: number;
 }
 
 function toAttemptRow(
@@ -266,8 +274,10 @@ export async function syncAbandonedCheckouts(
 
   try {
     if (store.checkoutSyncMode === CheckoutSyncMode.SHEET) {
-      const sheetResult = await syncAbandonedCheckoutsFromSheet(store);
-      const autoCalls = await processScheduledCallsForStore(storeDomain);
+      const sheetPage = options.sheetPage ?? 0;
+      const sheetResult = await syncAbandonedCheckoutsFromSheet(store, {
+        page: sheetPage,
+      });
       const dbPage = options.dbPage ?? 0;
       const pageResult = await fetchOpenCheckouts(storeDomain, dbPage);
 
@@ -275,8 +285,10 @@ export async function syncAbandonedCheckouts(
         "[sheet] abandoned checkouts synced",
         JSON.stringify({
           storeDomain,
+          page: sheetResult.page,
           synced: sheetResult.synced,
           skipped: sheetResult.skipped,
+          hasMore: sheetResult.hasMore,
         })
       );
 
@@ -289,11 +301,15 @@ export async function syncAbandonedCheckouts(
           sheetResult.skipped > 0
             ? `${sheetResult.skipped} sheet row(s) skipped (missing variant IDs).`
             : undefined,
-        autoCalls,
         pageSize: pageResult.pageSize,
         page: pageResult.page,
         hasMore: pageResult.hasMore,
         totalCount: pageResult.totalCount,
+        sheetPageInfo: {
+          page: sheetResult.page,
+          hasNextPage: sheetResult.hasMore,
+          pageSize: sheetResult.pageSize,
+        },
       };
     }
 
@@ -387,13 +403,9 @@ export async function syncAbandonedCheckouts(
               ? {
                   callStatus: CallStatus.PENDING,
                   lastError: null,
-                  callScheduled: Boolean(phone && scheduledCallAt),
+                  callScheduled: false,
                 }
-              : {
-                  callScheduled:
-                    existing.callScheduled ||
-                    Boolean(phone && scheduledCallAt),
-                }),
+              : {}),
           },
         });
       } else {
@@ -408,7 +420,7 @@ export async function syncAbandonedCheckouts(
             lineItemsJson,
             shopifyCreatedAt,
             scheduledCallAt,
-            callScheduled: Boolean(phone),
+            callScheduled: false,
             callStatus: CallStatus.PENDING,
             storeDomain,
           },
@@ -416,7 +428,6 @@ export async function syncAbandonedCheckouts(
       }
     }
 
-    const autoCalls = await processScheduledCallsForStore(storeDomain);
     const dbPage = options.dbPage ?? 0;
     const pageResult = await fetchOpenCheckouts(storeDomain, dbPage);
     const tokenCache = getCachedAdminTokenInfo(storeDomain);
@@ -427,7 +438,6 @@ export async function syncAbandonedCheckouts(
       syncedAt: new Date().toISOString(),
       syncMode,
       warning,
-      autoCalls,
       adminTokenSource: tokenCache.cached ? "cache" : undefined,
       adminTokenExpiresInSec: tokenCache.expiresInSec,
       pageSize: pageResult.pageSize,

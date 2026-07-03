@@ -25,7 +25,7 @@ export function BillingPanel() {
 
   if (!selectedStoreDomain) {
     return (
-      <Card className="border-dashed border-border/60">
+      <Card className="border-dashed">
         <CardContent className="py-12 text-center text-sm text-muted-foreground">
           Select a store to view billing usage
         </CardContent>
@@ -49,7 +49,7 @@ export function BillingPanel() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <Card className="border-border/60 bg-card/50">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Total Sessions
@@ -64,7 +64,7 @@ export function BillingPanel() {
           </CardContent>
         </Card>
 
-        <Card className="border-border/60 bg-card/50">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Minutes Consumed
@@ -81,7 +81,7 @@ export function BillingPanel() {
           </CardContent>
         </Card>
 
-        <Card className="border-border/60 bg-card/50">
+        <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Estimated Usage

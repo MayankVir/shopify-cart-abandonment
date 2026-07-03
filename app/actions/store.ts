@@ -14,7 +14,6 @@ import { encryptToken, decryptToken } from "@/lib/encryption";
 import {
   mergeAlternateShopDomains,
   normalizeStoreDomain,
-  parseAlternateShopDomains,
 } from "@/lib/store-domain";
 import {
   fetchShopMyshopifyAliases,
@@ -22,7 +21,6 @@ import {
 } from "@/lib/shopify-admin";
 import {
   resolveAdminAccessTokenFromPlainCredentials,
-  resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
 
 export interface StoreActionResult {
@@ -35,10 +33,8 @@ export interface StoreActionResult {
 
 export interface ManualStoreConfig {
   storeDomain: string;
-  alternateShopDomains: string;
   apiKey: string;
   apiSecret: string;
-  adminAccessToken: string;
   storefrontToken: string;
 }
 
@@ -67,10 +63,8 @@ export async function getManualStoreConfig(
 
   return {
     storeDomain: store.storeDomain,
-    alternateShopDomains: store.alternateShopDomains.join(", "),
     apiKey: safeDecrypt(store.apiKey),
     apiSecret: safeDecrypt(store.apiSecret),
-    adminAccessToken: safeDecrypt(store.adminAccessToken),
     storefrontToken: safeDecrypt(store.storefrontToken),
   };
 }
@@ -86,67 +80,6 @@ export async function getStoreDomainsForManualSetup(): Promise<string[]> {
   return stores.map((s) => s.storeDomain);
 }
 
-/** Preview *.myshopify.com aliases before save (Client ID + shpss_ or shpat_). */
-export async function lookupShopAlternateDomains(
-  storeDomain: string,
-  credentials: {
-    adminAccessToken?: string;
-    apiKey?: string;
-    apiSecret?: string;
-  }
-): Promise<{ domains: string[]; error?: string }> {
-  const { userId } = await auth();
-  if (!userId) {
-    return { domains: [], error: "Unauthorized" };
-  }
-
-  const normalized = normalizeStoreDomain(storeDomain);
-  if (!normalized) {
-    return { domains: [], error: "Store domain is required" };
-  }
-
-  const hasClientCreds = Boolean(credentials.apiKey?.trim() && credentials.apiSecret?.trim());
-  const hasShpat = Boolean(credentials.adminAccessToken?.startsWith("shpat_"));
-
-  if (!hasClientCreds && !hasShpat) {
-    return {
-      domains: [],
-      error: "Client ID + Secret or Admin access token (shpat_) required",
-    };
-  }
-
-  try {
-    const resolved = hasClientCreds
-      ? await resolveAdminAccessTokenFromPlainCredentials({
-          storeDomain: normalized,
-          clientId: credentials.apiKey!.trim(),
-          clientSecret: credentials.apiSecret!.trim(),
-          adminAccessToken: credentials.adminAccessToken,
-        })
-      : await resolveStoreAdminAccessToken({
-          storeDomain: normalized,
-          apiKey: null,
-          apiSecret: null,
-          adminAccessToken: credentials.adminAccessToken!,
-        });
-
-    const discovered = await fetchShopMyshopifyAliases(
-      normalized,
-      resolved.token
-    );
-    const linked = mergeAlternateShopDomains(normalized, [], discovered);
-    return { domains: linked };
-  } catch (error) {
-    return {
-      domains: [],
-      error:
-        error instanceof Error
-          ? error.message
-          : "Could not fetch shop domains from Shopify",
-    };
-  }
-}
-
 export async function saveManualStoreConfig(formData: FormData): Promise<StoreActionResult> {
   const { userId } = await auth();
   if (!userId) {
@@ -158,13 +91,7 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
   );
   const apiKey = String(formData.get("apiKey") ?? "").trim();
   const apiSecret = String(formData.get("apiSecret") ?? "").trim();
-  const adminAccessToken = String(formData.get("adminAccessToken") ?? "").trim();
   const storefrontToken = String(formData.get("storefrontToken") ?? "").trim();
-  const alternateShopDomainsRaw = String(formData.get("alternateShopDomains") ?? "");
-  let alternateShopDomains = parseAlternateShopDomains(
-    alternateShopDomainsRaw,
-    storeDomain
-  );
 
   if (!storeDomain) {
     return { success: false, error: "Store domain is required" };
@@ -175,54 +102,44 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
   if (!apiSecret) {
     return { success: false, error: "Client Secret is required" };
   }
-  const hasClientCredentials = Boolean(apiKey && apiSecret);
-  const hasShpat = adminAccessToken.startsWith("shpat_");
-  if (adminAccessToken && !hasShpat) {
-    return {
-      success: false,
-      error: "Admin access token must start with shpat_ when provided",
-    };
-  }
-  if (!storefrontToken) {
-    return { success: false, error: "Storefront public API token is required" };
-  }
 
   try {
-    let adminTokenForApi = adminAccessToken;
-    if (!hasShpat && hasClientCredentials) {
-      const resolved = await resolveAdminAccessTokenFromPlainCredentials({
+    const existing = await db.store.findUnique({
+      where: { storeDomain },
+      select: { alternateShopDomains: true },
+    });
+    let alternateShopDomains = existing?.alternateShopDomains ?? [];
+
+    const resolved = await resolveAdminAccessTokenFromPlainCredentials({
+      storeDomain,
+      clientId: apiKey,
+      clientSecret: apiSecret,
+    });
+    const adminTokenForApi = resolved.token;
+    console.info(
+      "Manual setup: obtained Admin token via client_credentials",
+      JSON.stringify({
         storeDomain,
-        clientId: apiKey,
-        clientSecret: apiSecret,
-      });
-      adminTokenForApi = resolved.token;
-      console.info(
-        "Manual setup: obtained Admin token via client_credentials",
-        JSON.stringify({
-          storeDomain,
-          source: resolved.source,
-          expiresInSec: resolved.expiresInSec,
-        })
-      );
-    }
+        source: resolved.source,
+        expiresInSec: resolved.expiresInSec,
+      })
+    );
 
     try {
-      if (adminTokenForApi) {
-        const discovered = await fetchShopMyshopifyAliases(
-          storeDomain,
-          adminTokenForApi
+      const discovered = await fetchShopMyshopifyAliases(
+        storeDomain,
+        adminTokenForApi
+      );
+      alternateShopDomains = mergeAlternateShopDomains(
+        storeDomain,
+        alternateShopDomains,
+        discovered
+      );
+      if (discovered.length > 0) {
+        console.info(
+          "Auto-linked shop myshopify domains",
+          JSON.stringify({ storeDomain, discovered, linked: alternateShopDomains })
         );
-        alternateShopDomains = mergeAlternateShopDomains(
-          storeDomain,
-          alternateShopDomains,
-          discovered
-        );
-        if (discovered.length > 0) {
-          console.info(
-            "Auto-linked shop myshopify domains",
-            JSON.stringify({ storeDomain, discovered, linked: alternateShopDomains })
-          );
-        }
       }
     } catch (domainError) {
       console.warn(
@@ -238,23 +155,23 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
         alternateShopDomains,
         apiKey: encryptToken(apiKey),
         apiSecret: encryptToken(apiSecret),
-        adminAccessToken: hasShpat ? encryptToken(adminAccessToken) : encryptToken(""),
+        adminAccessToken: encryptToken(""),
         storefrontToken: encryptToken(storefrontToken),
       },
       update: {
         alternateShopDomains,
         apiKey: encryptToken(apiKey),
         apiSecret: encryptToken(apiSecret),
-        adminAccessToken: hasShpat ? encryptToken(adminAccessToken) : encryptToken(""),
-        storefrontToken: encryptToken(storefrontToken),
+        adminAccessToken: encryptToken(""),
+        ...(storefrontToken
+          ? { storefrontToken: encryptToken(storefrontToken) }
+          : {}),
       },
     });
 
-    if (adminTokenForApi) {
-      const access = await verifyStoreAdminAccess(storeDomain, adminTokenForApi);
-      if (!access.ok) {
-        console.warn("Scope verification warning on save:", access.error);
-      }
+    const access = await verifyStoreAdminAccess(storeDomain, adminTokenForApi);
+    if (!access.ok) {
+      console.warn("Scope verification warning on save:", access.error);
     }
 
     revalidatePath("/dashboard/analytics");

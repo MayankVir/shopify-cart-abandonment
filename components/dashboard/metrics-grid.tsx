@@ -47,7 +47,7 @@ export function MetricsGrid() {
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {METRIC_CONFIG.map(({ key, label, icon: Icon, description }) => (
-        <Card key={key} className="border-border/60 bg-card/50">
+        <Card key={key}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               {label}

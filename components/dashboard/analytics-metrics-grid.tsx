@@ -55,7 +55,7 @@ export function AnalyticsMetricsGrid({ summary }: AnalyticsMetricsGridProps) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {METRIC_CONFIG.map(({ key, label, icon: Icon, description, format }) => (
-        <Card key={key} className="border-border/60 bg-card/50">
+        <Card key={key}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               {label}
@@ -76,7 +76,7 @@ export function AnalyticsMetricsGrid({ summary }: AnalyticsMetricsGridProps) {
 
 export function AnalyticsEmptyState() {
   return (
-    <Card className="border-dashed border-border/60">
+    <Card className="border-dashed">
       <CardContent className="flex flex-col items-center justify-center gap-2 py-12 text-center">
         <BarChart3 className="h-8 w-8 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">

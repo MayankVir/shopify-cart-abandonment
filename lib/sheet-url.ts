@@ -29,6 +29,16 @@ export function sheetCsvCandidateUrls(
   ];
 }
 
+/** GViz query URL for a specific cell range (paginated CSV slice). */
+export function sheetGvizRangeUrl(
+  spreadsheetId: string,
+  gid: string,
+  range: string
+): string {
+  const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
+  return `${base}/gviz/tq?tqx=out:csv&gid=${gid}&range=${encodeURIComponent(range)}`;
+}
+
 /** Convert a Google Sheets edit/share URL into a CSV export URL. */
 export function toSheetCsvExportUrl(input: string): string {
   const trimmed = input.trim();

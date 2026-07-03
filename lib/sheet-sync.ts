@@ -8,7 +8,9 @@ import {
 } from "@/lib/line-items";
 import { normalizePhoneNumber } from "@/lib/phone";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
-import { parseSheetUrl, sheetCsvCandidateUrls } from "@/lib/sheet-url";
+import { parseSheetUrl, sheetGvizRangeUrl } from "@/lib/sheet-url";
+
+export const SHEET_SYNC_PAGE_SIZE = 10;
 
 export const SHEET_HEADERS = [
   "timestamp_incoming_webhook",
@@ -140,6 +142,66 @@ function parseCsv(text: string): string[][] {
   }
 
   return rows;
+}
+
+function columnIndexToLetter(index: number): string {
+  let n = index;
+  let result = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    result = String.fromCharCode(65 + rem) + result;
+    n = Math.floor((n - 1) / 26);
+  }
+  return result;
+}
+
+function sheetRangeForPage(page: number, pageSize: number): string {
+  const lastCol = columnIndexToLetter(SHEET_HEADERS.length);
+  const dataStartRow = 2 + page * pageSize;
+  const dataEndRow = dataStartRow + pageSize - 1;
+
+  if (page === 0) {
+    return `A1:${lastCol}${dataEndRow}`;
+  }
+
+  return `A${dataStartRow}:${lastCol}${dataEndRow}`;
+}
+
+function countSheetDataRows(text: string, includesHeader: boolean): number {
+  const rows = parseCsv(text);
+  if (includesHeader) {
+    return Math.max(0, rows.length - 1);
+  }
+  return rows.length;
+}
+
+export async function fetchSheetCsvPage(
+  sheetUrl: string,
+  page = 0,
+  pageSize = SHEET_SYNC_PAGE_SIZE
+): Promise<{ csv: string; includesHeader: boolean }> {
+  const trimmed = sheetUrl.trim();
+  const parsed = parseSheetUrl(trimmed);
+  if (!parsed) {
+    throw new Error(
+      "Invalid Google Sheets URL — paste a link like https://docs.google.com/spreadsheets/d/…/edit"
+    );
+  }
+
+  const includesHeader = page === 0;
+  const range = sheetRangeForPage(page, pageSize);
+  const url = sheetGvizRangeUrl(parsed.spreadsheetId, parsed.gid, range);
+  const result = await tryFetchCsv(url);
+
+  if (result.ok) {
+    return { csv: result.text, includesHeader };
+  }
+
+  const dataStartRow = 2 + page * pageSize;
+  const dataEndRow = dataStartRow + pageSize - 1;
+  throw new Error(
+    `Could not fetch sheet rows ${dataStartRow}–${dataEndRow}. Make sure the sheet is shared as "Anyone with the link can view" or published to the web.`
+  );
 }
 
 function rowToRecord(headers: string[], values: string[]): Record<string, string> {
@@ -297,59 +359,39 @@ async function tryFetchCsv(url: string): Promise<{ ok: boolean; text: string; st
   }
 }
 
-export async function fetchSheetCsv(sheetUrl: string): Promise<string> {
-  const trimmed = sheetUrl.trim();
-
-  // If an explicit export/pub URL was saved, try it directly first.
-  if (
-    (trimmed.includes("/export?") || trimmed.includes("/pub?")) &&
-    (trimmed.includes("format=csv") || trimmed.includes("output=csv"))
-  ) {
-    const result = await tryFetchCsv(trimmed);
-    if (result.ok) return result.text;
-  }
-
-  // Otherwise derive the spreadsheet ID and try both formats.
-  const parsed = parseSheetUrl(trimmed);
-  if (!parsed) {
-    throw new Error(
-      "Invalid Google Sheets URL — paste a link like https://docs.google.com/spreadsheets/d/…/edit"
-    );
-  }
-
-  const candidates = sheetCsvCandidateUrls(parsed.spreadsheetId, parsed.gid);
-  for (const url of candidates) {
-    const result = await tryFetchCsv(url);
-    if (result.ok) return result.text;
-  }
-
-  throw new Error(
-    "Could not fetch the Google Sheet as CSV. Make sure the sheet is shared as:\n" +
-    '• "Anyone with the link" -> Viewer (for /export URL), or\n' +
-    "• File -> Share -> Publish to web -> CSV (for /pub URL).\n" +
-    `Tried: ${candidates.join(" and ")}`
-  );
-}
-
-export function parseSheetCsv(text: string): ParsedSheetRow[] {
+export function parseSheetCsv(
+  text: string,
+  options?: { dataOnly?: boolean }
+): ParsedSheetRow[] {
   const rows = parseCsv(text);
-  if (rows.length < 2) return [];
-
-  const headers = rows[0].map((h) => h.trim().toLowerCase());
   const expected = SHEET_HEADERS as readonly string[];
+  const dataOnly = options?.dataOnly ?? false;
 
-  const headerOk =
-    headers.length >= expected.length &&
-    expected.every((name, i) => headers[i] === name);
+  let headers: string[];
+  let dataStartIndex: number;
 
-  if (!headerOk) {
-    throw new Error(
-      `Sheet header mismatch — expected ${expected.length} columns starting with request_id. Got: ${headers.slice(0, 5).join(", ")}…`
-    );
+  if (dataOnly) {
+    if (rows.length === 0) return [];
+    headers = [...expected];
+    dataStartIndex = 0;
+  } else {
+    if (rows.length < 2) return [];
+    headers = rows[0].map((h) => h.trim().toLowerCase());
+    dataStartIndex = 1;
+
+    const headerOk =
+      headers.length >= expected.length &&
+      expected.every((name, i) => headers[i] === name);
+
+    if (!headerOk) {
+      throw new Error(
+        `Sheet header mismatch — expected ${expected.length} columns starting with request_id. Got: ${headers.slice(0, 5).join(", ")}…`
+      );
+    }
   }
 
   const parsed: ParsedSheetRow[] = [];
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = dataStartIndex; i < rows.length; i++) {
     const record = rowToRecord([...expected], rows[i]);
     const row = parseSheetRow(record);
     if (row) parsed.push(row);
@@ -358,15 +400,37 @@ export function parseSheetCsv(text: string): ParsedSheetRow[] {
   return parsed;
 }
 
+export async function fetchSheetCsv(sheetUrl: string): Promise<string> {
+  const { csv } = await fetchSheetCsvPage(sheetUrl, 0, SHEET_SYNC_PAGE_SIZE);
+  return csv;
+}
+
+export interface SheetSyncResult {
+  synced: number;
+  skipped: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
 export async function syncAbandonedCheckoutsFromSheet(
-  store: Pick<Store, "storeDomain" | "sheetUrl" | "callDelayMinutes">
-): Promise<{ synced: number; skipped: number }> {
+  store: Pick<Store, "storeDomain" | "sheetUrl" | "callDelayMinutes">,
+  options: { page?: number; pageSize?: number } = {}
+): Promise<SheetSyncResult> {
   if (!store.sheetUrl?.trim()) {
     throw new Error("Sheet URL is not configured for this store");
   }
 
-  const csv = await fetchSheetCsv(store.sheetUrl);
-  const rows = parseSheetCsv(csv);
+  const page = options.page ?? 0;
+  const pageSize = options.pageSize ?? SHEET_SYNC_PAGE_SIZE;
+  const { csv, includesHeader } = await fetchSheetCsvPage(
+    store.sheetUrl,
+    page,
+    pageSize
+  );
+  const rawRowCount = countSheetDataRows(csv, includesHeader);
+  const rows = parseSheetCsv(csv, { dataOnly: !includesHeader });
+  const hasMore = rawRowCount >= pageSize;
 
   let synced = 0;
   let skipped = 0;
@@ -415,8 +479,7 @@ export async function syncAbandonedCheckoutsFromSheet(
           userContext,
           shopifyCreatedAt: row.shopifyCreatedAt ?? existing.shopifyCreatedAt,
           scheduledCallAt,
-          callScheduled:
-            existing.callScheduled || Boolean(row.customerPhone && scheduledCallAt),
+          callScheduled: false,
           storeDomain: store.storeDomain,
           ...(lineItemsChanged
             ? { draftOrderId: "", draftOrderName: "" }
@@ -435,7 +498,7 @@ export async function syncAbandonedCheckoutsFromSheet(
           userContext,
           shopifyCreatedAt: row.shopifyCreatedAt,
           scheduledCallAt,
-          callScheduled: Boolean(row.customerPhone),
+          callScheduled: false,
           callStatus: CallStatus.PENDING,
           storeDomain: store.storeDomain,
         },
@@ -450,5 +513,5 @@ export async function syncAbandonedCheckoutsFromSheet(
     data: { lastSheetSyncAt: new Date() },
   });
 
-  return { synced, skipped };
+  return { synced, skipped, page, pageSize, hasMore };
 }

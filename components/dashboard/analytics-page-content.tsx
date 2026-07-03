@@ -3,14 +3,12 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import type { StoreAnalyticsView } from "@/app/actions/analytics";
-import { getStoresForDashboard } from "@/app/actions/store";
 import { AnalyticsDateRangeSelect } from "@/components/dashboard/analytics-date-range-select";
 import {
   AnalyticsEmptyState,
   AnalyticsMetricsGrid,
 } from "@/components/dashboard/analytics-metrics-grid";
 import { CallLogPanel } from "@/components/dashboard/call-log-panel";
-import { StoreSelector } from "@/components/dashboard/store-selector";
 import { TtaiTimeSeriesPanel } from "@/components/dashboard/ttai-time-series-panel";
 import { useStoreAnalytics } from "@/hooks/use-store-analytics";
 import { type AnalyticsDateRange } from "@/lib/analytics";
@@ -34,11 +32,7 @@ import { formatDuration } from "@/lib/analytics";
 import { STATUS_VARIANT, formatCallStatus } from "@/lib/call-status";
 import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
 
-interface AnalyticsPageContentProps {
-  stores: Awaited<ReturnType<typeof getStoresForDashboard>>;
-}
-
-export function AnalyticsPageContent({ stores }: AnalyticsPageContentProps) {
+export function AnalyticsPageContent() {
   const [dateRange, setDateRange] = useState<AnalyticsDateRange>("30d");
   const { data, isLoading, selectedStoreDomain } = useStoreAnalytics(dateRange);
 
@@ -53,7 +47,6 @@ export function AnalyticsPageContent({ stores }: AnalyticsPageContentProps) {
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <AnalyticsDateRangeSelect value={dateRange} onChange={setDateRange} />
-          <StoreSelector stores={stores} />
         </div>
       </div>
 
