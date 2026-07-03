@@ -8,7 +8,7 @@ import {
 } from "@/lib/line-items";
 import { normalizePhoneNumber } from "@/lib/phone";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
-import { parseSheetUrl, sheetCsvCandidateUrls, toSheetCsvExportUrl } from "@/lib/sheet-url";
+import { parseSheetUrl, sheetCsvCandidateUrls } from "@/lib/sheet-url";
 
 export const SHEET_HEADERS = [
   "timestamp_incoming_webhook",
