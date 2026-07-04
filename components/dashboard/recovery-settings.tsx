@@ -8,6 +8,10 @@ import {
   type CheckoutSyncModeValue,
 } from "@/lib/checkout-sync-mode";
 import {
+  SHEET_SYNC_DIRECTIONS,
+  type SheetSyncDirectionValue,
+} from "@/lib/sheet-sync-direction";
+import {
   getStoreRecoverySettings,
   updateStoreRecoverySettings,
   updateStoreSheetSettings,
@@ -47,6 +51,8 @@ export function RecoverySettings({
   const [checkoutSyncMode, setCheckoutSyncMode] =
     useState<CheckoutSyncModeValue>(CHECKOUT_SYNC_MODES.POLLING);
   const [sheetUrl, setSheetUrl] = useState("");
+  const [sheetSyncDirection, setSheetSyncDirection] =
+    useState<SheetSyncDirectionValue>(SHEET_SYNC_DIRECTIONS.BOTTOM);
   const [ttaiConfigured, setTtaiConfigured] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadedForDomain, setLoadedForDomain] = useState<string | null>(null);
@@ -73,6 +79,11 @@ export function RecoverySettings({
       setCallDelayMinutes(settings.callDelayMinutes);
       setSipConcurrency(settings.sipConcurrency);
       setSheetUrl(settings.sheetUrl ?? "");
+      setSheetSyncDirection(
+        settings.sheetSyncDirection === "TOP"
+          ? SHEET_SYNC_DIRECTIONS.TOP
+          : SHEET_SYNC_DIRECTIONS.BOTTOM
+      );
       const mode = settings.checkoutSyncMode;
       if (
         mode === CHECKOUT_SYNC_MODES.WEBHOOK ||
@@ -115,6 +126,7 @@ export function RecoverySettings({
       const sheet = await updateStoreSheetSettings(storeDomain, {
         sheetUrl,
         checkoutSyncMode,
+        sheetSyncDirection,
       });
       if (!sheet.success) {
         toast.error(sheet.error ?? "Failed to save sheet settings");
@@ -170,20 +182,47 @@ export function RecoverySettings({
             </div>
 
             {checkoutSyncMode === CHECKOUT_SYNC_MODES.SHEET && (
-              <div className="space-y-2">
-                <Label htmlFor="sheet-url">Abandoned checkout sheet URL</Label>
-                <Input
-                  id="sheet-url"
-                  type="url"
-                  value={sheetUrl}
-                  onChange={(e) => setSheetUrl(e.target.value)}
-                  placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Public Google Sheet — shared as &quot;Anyone with the link&quot;
-                  or published to web as CSV.
-                </p>
-              </div>
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="sheet-url">Abandoned checkout sheet URL</Label>
+                  <Input
+                    id="sheet-url"
+                    type="url"
+                    value={sheetUrl}
+                    onChange={(e) => setSheetUrl(e.target.value)}
+                    placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Public Google Sheet — shared as &quot;Anyone with the link&quot;
+                    or published to web as CSV.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sheet-sync-direction">Sheet sync order</Label>
+                  <Select
+                    value={sheetSyncDirection}
+                    onValueChange={(value) =>
+                      setSheetSyncDirection(value as SheetSyncDirectionValue)
+                    }
+                  >
+                    <SelectTrigger id="sheet-sync-direction">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={SHEET_SYNC_DIRECTIONS.BOTTOM}>
+                        Newest first (from bottom of sheet)
+                      </SelectItem>
+                      <SelectItem value={SHEET_SYNC_DIRECTIONS.TOP}>
+                        Oldest first (from top of sheet)
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Sync now pulls 10 rows at a time. Newest first matches
+                    webhook rows appended at the bottom of your sheet.
+                  </p>
+                </div>
+              </>
             )}
 
             <div className="grid gap-4 sm:grid-cols-2">

@@ -9,6 +9,11 @@ import {
 import { normalizePhoneNumber } from "@/lib/phone";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
 import { parseSheetUrl, sheetGvizRangeUrl } from "@/lib/sheet-url";
+import {
+  SHEET_SYNC_DIRECTIONS,
+  sheetRowRangeLabel,
+  type SheetSyncDirectionValue,
+} from "@/lib/sheet-sync-direction";
 
 export const SHEET_SYNC_PAGE_SIZE = 10;
 
@@ -155,16 +160,53 @@ function columnIndexToLetter(index: number): string {
   return result;
 }
 
-function sheetRangeForPage(page: number, pageSize: number): string {
+function sheetRangeForPage(
+  page: number,
+  pageSize: number,
+  options: {
+    direction: SheetSyncDirectionValue;
+    totalDataRows?: number;
+  }
+): { range: string; includesHeader: boolean } | null {
   const lastCol = columnIndexToLetter(SHEET_HEADERS.length);
-  const dataStartRow = 2 + page * pageSize;
-  const dataEndRow = dataStartRow + pageSize - 1;
+  const direction = options.direction;
 
-  if (page === 0) {
-    return `A1:${lastCol}${dataEndRow}`;
+  if (direction === SHEET_SYNC_DIRECTIONS.TOP) {
+    const dataStartRow = 2 + page * pageSize;
+    const dataEndRow = dataStartRow + pageSize - 1;
+
+    if (page === 0) {
+      return {
+        range: `A1:${lastCol}${dataEndRow}`,
+        includesHeader: true,
+      };
+    }
+
+    return {
+      range: `A${dataStartRow}:${lastCol}${dataEndRow}`,
+      includesHeader: false,
+    };
   }
 
-  return `A${dataStartRow}:${lastCol}${dataEndRow}`;
+  const totalDataRows = options.totalDataRows ?? 0;
+  if (totalDataRows <= 0) {
+    return null;
+  }
+
+  const totalPages = Math.ceil(totalDataRows / pageSize);
+  if (page >= totalPages) {
+    return null;
+  }
+
+  const pageIndexFromTop = totalPages - 1 - page;
+  const dataStartRow = 2 + pageIndexFromTop * pageSize;
+  const lastDataRow = 1 + totalDataRows;
+  const dataEndRow = Math.min(dataStartRow + pageSize - 1, lastDataRow);
+
+  return {
+    range: `A${dataStartRow}:${lastCol}${dataEndRow}`,
+    includesHeader: false,
+  };
 }
 
 function countSheetDataRows(text: string, includesHeader: boolean): number {
@@ -175,10 +217,36 @@ function countSheetDataRows(text: string, includesHeader: boolean): number {
   return rows.length;
 }
 
+export async function fetchSheetDataRowCount(sheetUrl: string): Promise<number> {
+  const trimmed = sheetUrl.trim();
+  const parsed = parseSheetUrl(trimmed);
+  if (!parsed) {
+    throw new Error(
+      "Invalid Google Sheets URL — paste a link like https://docs.google.com/spreadsheets/d/…/edit"
+    );
+  }
+
+  const url = sheetGvizRangeUrl(parsed.spreadsheetId, parsed.gid, "A2:A20000");
+  const result = await tryFetchCsv(url);
+  if (!result.ok) {
+    throw new Error(
+      "Could not read sheet row count. Make sure the sheet is shared as \"Anyone with the link can view\" or published to the web."
+    );
+  }
+
+  return parseCsv(result.text).filter((row) =>
+    row.some((cell) => cell.trim() !== "")
+  ).length;
+}
+
 export async function fetchSheetCsvPage(
   sheetUrl: string,
   page = 0,
-  pageSize = SHEET_SYNC_PAGE_SIZE
+  pageSize = SHEET_SYNC_PAGE_SIZE,
+  options: {
+    direction?: SheetSyncDirectionValue;
+    totalDataRows?: number;
+  } = {}
 ): Promise<{ csv: string; includesHeader: boolean }> {
   const trimmed = sheetUrl.trim();
   const parsed = parseSheetUrl(trimmed);
@@ -188,8 +256,23 @@ export async function fetchSheetCsvPage(
     );
   }
 
-  const includesHeader = page === 0;
-  const range = sheetRangeForPage(page, pageSize);
+  const direction = options.direction ?? SHEET_SYNC_DIRECTIONS.BOTTOM;
+  let totalDataRows = options.totalDataRows;
+
+  if (direction === SHEET_SYNC_DIRECTIONS.BOTTOM && totalDataRows == null) {
+    totalDataRows = await fetchSheetDataRowCount(trimmed);
+  }
+
+  const rangeSpec = sheetRangeForPage(page, pageSize, {
+    direction,
+    totalDataRows,
+  });
+
+  if (!rangeSpec) {
+    throw new Error("No more sheet rows to sync for this page.");
+  }
+
+  const { range, includesHeader } = rangeSpec;
   const url = sheetGvizRangeUrl(parsed.spreadsheetId, parsed.gid, range);
   const result = await tryFetchCsv(url);
 
@@ -197,10 +280,8 @@ export async function fetchSheetCsvPage(
     return { csv: result.text, includesHeader };
   }
 
-  const dataStartRow = 2 + page * pageSize;
-  const dataEndRow = dataStartRow + pageSize - 1;
   throw new Error(
-    `Could not fetch sheet rows ${dataStartRow}–${dataEndRow}. Make sure the sheet is shared as "Anyone with the link can view" or published to the web.`
+    `Could not fetch sheet range ${range}. Make sure the sheet is shared as "Anyone with the link can view" or published to the web.`
   );
 }
 
@@ -411,10 +492,16 @@ export interface SheetSyncResult {
   page: number;
   pageSize: number;
   hasMore: boolean;
+  totalDataRows: number;
+  rowRangeLabel: string;
+  syncDirection: SheetSyncDirectionValue;
 }
 
 export async function syncAbandonedCheckoutsFromSheet(
-  store: Pick<Store, "storeDomain" | "sheetUrl" | "callDelayMinutes">,
+  store: Pick<
+    Store,
+    "storeDomain" | "sheetUrl" | "callDelayMinutes" | "sheetSyncDirection"
+  >,
   options: { page?: number; pageSize?: number } = {}
 ): Promise<SheetSyncResult> {
   if (!store.sheetUrl?.trim()) {
@@ -423,14 +510,24 @@ export async function syncAbandonedCheckoutsFromSheet(
 
   const page = options.page ?? 0;
   const pageSize = options.pageSize ?? SHEET_SYNC_PAGE_SIZE;
+  const syncDirection =
+    store.sheetSyncDirection === "TOP"
+      ? SHEET_SYNC_DIRECTIONS.TOP
+      : SHEET_SYNC_DIRECTIONS.BOTTOM;
+
+  const totalDataRows = await fetchSheetDataRowCount(store.sheetUrl);
+
   const { csv, includesHeader } = await fetchSheetCsvPage(
     store.sheetUrl,
     page,
-    pageSize
+    pageSize,
+    { direction: syncDirection, totalDataRows }
   );
   const rawRowCount = countSheetDataRows(csv, includesHeader);
   const rows = parseSheetCsv(csv, { dataOnly: !includesHeader });
-  const hasMore = rawRowCount >= pageSize;
+
+  const totalPages = Math.ceil(Math.max(totalDataRows, 1) / pageSize);
+  const hasMore = page + 1 < totalPages && rawRowCount > 0;
 
   let synced = 0;
   let skipped = 0;
@@ -513,5 +610,19 @@ export async function syncAbandonedCheckoutsFromSheet(
     data: { lastSheetSyncAt: new Date() },
   });
 
-  return { synced, skipped, page, pageSize, hasMore };
+  return {
+    synced,
+    skipped,
+    page,
+    pageSize,
+    hasMore,
+    totalDataRows,
+    rowRangeLabel: sheetRowRangeLabel(
+      page,
+      pageSize,
+      totalDataRows,
+      syncDirection
+    ),
+    syncDirection,
+  };
 }

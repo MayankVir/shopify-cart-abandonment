@@ -14,6 +14,11 @@ enum CheckoutSyncMode {
   SHEET
 }
 
+enum SheetSyncDirection {
+  TOP
+  BOTTOM
+}
+
 model Store {
   id               String              @id @default(uuid())
   storeDomain      String              @unique
@@ -26,6 +31,8 @@ model Store {
   checkoutSyncMode CheckoutSyncMode    @default(POLLING)
   /** Public Google Sheet / CSV export URL for plugin abandoned-checkout rows. */
   sheetUrl         String              @default("") @db.Text
+  /** Whether sheet sync reads from the top (oldest) or bottom (newest) of the sheet. */
+  sheetSyncDirection SheetSyncDirection @default(BOTTOM)
   lastSheetSyncAt  DateTime?
   /** Other *.myshopify.com hosts for the same shop (Shopify sends webhooks on any of them). */
   alternateShopDomains String[]        @default([])

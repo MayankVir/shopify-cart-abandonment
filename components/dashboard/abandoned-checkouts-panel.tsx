@@ -472,9 +472,7 @@ export function AbandonedCheckoutsPanel() {
     runSync({ sheetPage: sheetPageInfo.page + 1 });
   }
 
-  const sheetRowRangeLabel = sheetPageInfo
-    ? `Rows ${sheetPageInfo.page * sheetPageInfo.pageSize + 1}–${(sheetPageInfo.page + 1) * sheetPageInfo.pageSize}`
-    : null;
+  const sheetRowRangeLabel = sheetPageInfo?.rowRangeLabel ?? null;
 
   function handleBulkCancelSchedule() {
     if (!selectedStoreDomain || selectedCount === 0) return;

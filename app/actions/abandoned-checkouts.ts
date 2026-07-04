@@ -1,7 +1,7 @@
 "use server";
 
 import { auth } from "@clerk/nextjs/server";
-import { CallStatus, CheckoutSyncMode, Prisma } from "@prisma/client";
+import { CallStatus, CheckoutSyncMode, Prisma, SheetSyncDirection } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
 import {
@@ -110,6 +110,9 @@ export interface SheetPageInfo {
   page: number;
   hasNextPage: boolean;
   pageSize: number;
+  rowRangeLabel?: string;
+  syncDirection?: "TOP" | "BOTTOM";
+  totalDataRows?: number;
 }
 
 export interface PaginatedCheckoutsResult {
@@ -309,6 +312,9 @@ export async function syncAbandonedCheckouts(
           page: sheetResult.page,
           hasNextPage: sheetResult.hasMore,
           pageSize: sheetResult.pageSize,
+          rowRangeLabel: sheetResult.rowRangeLabel,
+          syncDirection: sheetResult.syncDirection,
+          totalDataRows: sheetResult.totalDataRows,
         },
       };
     }
@@ -687,6 +693,7 @@ export async function getStoreRecoverySettings(storeDomain: string) {
       sipConcurrency: true,
       checkoutSyncMode: true,
       sheetUrl: true,
+      sheetSyncDirection: true,
       lastSheetSyncAt: true,
       ttaiScenarioId: true,
       ttaiTrunkId: true,
@@ -696,7 +703,11 @@ export async function getStoreRecoverySettings(storeDomain: string) {
 
 export async function updateStoreSheetSettings(
   storeDomain: string,
-  input: { sheetUrl: string; checkoutSyncMode?: CheckoutSyncModeValue }
+  input: {
+    sheetUrl: string;
+    checkoutSyncMode?: CheckoutSyncModeValue;
+    sheetSyncDirection?: "TOP" | "BOTTOM";
+  }
 ): Promise<{ success: boolean; error?: string }> {
   const { userId } = await auth();
   if (!userId) {
@@ -705,9 +716,18 @@ export async function updateStoreSheetSettings(
 
   const sheetUrl = input.sheetUrl.trim();
   const mode = input.checkoutSyncMode;
+  const sheetSyncDirection = input.sheetSyncDirection;
 
   if (mode && !isCheckoutSyncMode(mode)) {
     return { success: false, error: "Invalid sync mode" };
+  }
+
+  if (
+    sheetSyncDirection &&
+    sheetSyncDirection !== "TOP" &&
+    sheetSyncDirection !== "BOTTOM"
+  ) {
+    return { success: false, error: "Invalid sheet sync direction" };
   }
 
   if (mode === CHECKOUT_SYNC_MODES.SHEET && !sheetUrl) {
@@ -720,6 +740,9 @@ export async function updateStoreSheetSettings(
       data: {
         sheetUrl,
         ...(mode ? { checkoutSyncMode: mode as CheckoutSyncMode } : {}),
+        ...(sheetSyncDirection
+          ? { sheetSyncDirection: sheetSyncDirection as SheetSyncDirection }
+          : {}),
       },
     });
     revalidatePath("/dashboard/analytics");
