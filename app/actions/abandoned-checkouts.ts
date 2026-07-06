@@ -37,7 +37,10 @@ import {
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
 import { canStopCall } from "@/lib/call-status";
-import { syncAbandonedCheckoutsFromSheet } from "@/lib/sheet-sync";
+import {
+  SHEET_SYNC_PAGE_SIZE,
+  syncAbandonedCheckoutsFromSheet,
+} from "@/lib/sheet-sync";
 
 const ARCHIVED_IN_SHOPIFY_MESSAGE = "Archived in Shopify admin";
 
@@ -179,7 +182,17 @@ function toRow(
   };
 }
 
-async function fetchOpenCheckouts(storeDomain: string, page = 0) {
+function checkoutListPageSize(mode: CheckoutSyncMode): number {
+  return mode === CheckoutSyncMode.SHEET
+    ? SHEET_SYNC_PAGE_SIZE
+    : ABANDONED_CHECKOUTS_PAGE_SIZE;
+}
+
+async function fetchOpenCheckouts(
+  storeDomain: string,
+  page = 0,
+  pageSize = ABANDONED_CHECKOUTS_PAGE_SIZE
+) {
   await db.abandonedCheckout.updateMany({
     where: {
       storeDomain,
@@ -187,8 +200,6 @@ async function fetchOpenCheckouts(storeDomain: string, page = 0) {
     },
     data: { callStatus: CallStatus.PENDING },
   });
-
-  const pageSize = ABANDONED_CHECKOUTS_PAGE_SIZE;
   const skip = page * pageSize;
   const where = {
     storeDomain,
@@ -198,7 +209,10 @@ async function fetchOpenCheckouts(storeDomain: string, page = 0) {
   const [checkouts, totalCount] = await Promise.all([
     db.abandonedCheckout.findMany({
       where,
-      orderBy: [{ scheduledCallAt: "asc" }, { shopifyCreatedAt: "desc" }],
+      orderBy: [
+        { shopifyCreatedAt: { sort: "desc", nulls: "last" } },
+        { createdAt: "desc" },
+      ],
       skip,
       take: pageSize,
       include: {
@@ -247,7 +261,8 @@ export async function getAbandonedCheckoutsForStore(
     };
   }
 
-  const result = await fetchOpenCheckouts(storeDomain, page);
+  const pageSize = checkoutListPageSize(store.checkoutSyncMode);
+  const result = await fetchOpenCheckouts(storeDomain, page, pageSize);
   return { success: true, ...result };
 }
 
@@ -282,7 +297,11 @@ export async function syncAbandonedCheckouts(
         page: sheetPage,
       });
       const dbPage = options.dbPage ?? 0;
-      const pageResult = await fetchOpenCheckouts(storeDomain, dbPage);
+      const pageResult = await fetchOpenCheckouts(
+        storeDomain,
+        dbPage,
+        SHEET_SYNC_PAGE_SIZE
+      );
 
       console.info(
         "[sheet] abandoned checkouts synced",

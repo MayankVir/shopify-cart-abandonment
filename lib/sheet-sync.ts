@@ -543,8 +543,8 @@ export async function syncAbandonedCheckoutsFromSheet(
       where: { checkoutToken },
     });
 
-    const referenceDate =
-      row.abandonedAt ?? row.shopifyCreatedAt ?? new Date();
+    const abandonedAt = row.abandonedAt ?? row.shopifyCreatedAt;
+    const referenceDate = abandonedAt ?? new Date();
     const scheduledCallAt = resolveScheduledCallAt(
       existing,
       referenceDate,
@@ -574,7 +574,7 @@ export async function syncAbandonedCheckoutsFromSheet(
           recoveryUrl: row.recoveryUrl || existing.recoveryUrl,
           lineItemsJson,
           userContext,
-          shopifyCreatedAt: row.shopifyCreatedAt ?? existing.shopifyCreatedAt,
+          shopifyCreatedAt: abandonedAt ?? existing.shopifyCreatedAt,
           scheduledCallAt,
           callScheduled: false,
           storeDomain: store.storeDomain,
@@ -593,7 +593,7 @@ export async function syncAbandonedCheckoutsFromSheet(
           recoveryUrl: row.recoveryUrl,
           lineItemsJson,
           userContext,
-          shopifyCreatedAt: row.shopifyCreatedAt,
+          shopifyCreatedAt: abandonedAt,
           scheduledCallAt,
           callScheduled: false,
           callStatus: CallStatus.PENDING,
