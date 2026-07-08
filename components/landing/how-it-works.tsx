@@ -42,7 +42,7 @@ export function HowItWorks() {
             </div>
             <div className="md:w-1/2 text-left md:text-right md:pr-8">
               <div className="rounded-xl ring-1 ring-white/10 bg-black/50 p-6 backdrop-blur-sm">
-                <p className="text-sm text-gray-300 italic">"Hi Sarah, I saw you left the electric bike in your cart. Can I offer you a 10% discount to complete the order today?"</p>
+                <p className="text-sm text-gray-300 italic">&quot;Hi Sarah, I saw you left the electric bike in your cart. Can I offer you a 10% discount to complete the order today?&quot;</p>
               </div>
             </div>
           </div>
