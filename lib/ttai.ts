@@ -18,6 +18,8 @@ export interface SipDynamicVars {
   draft_order_context?: string;
   /** Pass to draftOrderComplete so the order stays unpaid (COD). */
   payment_pending?: string;
+  /** Sheet shipping address as one concatenated string. */
+  address?: string;
 }
 
 export interface DispatchSipCallParams {
@@ -465,6 +467,12 @@ export function buildSipDynamicVars(input: {
   draftOrderId?: string;
   draftOrderName?: string;
   draftOrderContext?: string;
+  shippingAddress?: {
+    address?: string;
+    pincode?: string;
+    state?: string;
+    country?: string;
+  } | null;
 }): SipDynamicVars {
   const vars: SipDynamicVars = {
     order_id: input.orderId,
@@ -486,6 +494,16 @@ export function buildSipDynamicVars(input: {
   }
   if (input.draftOrderName) vars.draft_order_name = input.draftOrderName;
   if (input.draftOrderContext) vars.draft_order_context = input.draftOrderContext;
+
+  const addr = input.shippingAddress;
+  if (addr) {
+    const address = [addr.address, addr.pincode, addr.state, addr.country]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(", ");
+    if (address) vars.address = address;
+  }
+
   return vars;
 }
 

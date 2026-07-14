@@ -76,10 +76,10 @@ export interface ParsedSheetRow {
   dropOffStage: string;
   cartItemsSummary: string;
   shippingAddress: {
-    address1: string;
-    zip: string;
-    province: string;
-    countryCode: string;
+    address: string;
+    pincode: string;
+    state: string;
+    country: string;
     city: string;
   } | null;
 }
@@ -397,13 +397,13 @@ export function parseSheetRow(record: Record<string, string>): ParsedSheetRow | 
 
   if (!parseBool(record.is_abandoned ?? "TRUE")) return null;
 
-  const address1 = record.address?.trim();
-  const shippingAddress = address1
+  const address = record.address?.trim();
+  const shippingAddress = address
     ? {
-        address1,
-        zip: record.pincode?.trim() || "",
-        province: record.state?.trim() || "",
-        countryCode: record.country?.trim() || "IN",
+        address,
+        pincode: record.pincode?.trim() || "",
+        state: record.state?.trim() || "",
+        country: record.country?.trim() || "IN",
         city: record.city?.trim() || "",
       }
     : null;

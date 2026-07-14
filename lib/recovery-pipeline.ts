@@ -39,22 +39,38 @@ function sheetContextFromUserContext(userContext: string): {
   try {
     const parsed = JSON.parse(userContext) as {
       customer_name?: string;
-      shipping_address?: CreateDraftOrderShipping | null;
+      shipping_address?: Record<string, string> | null;
     };
     return {
       customerName: parsed.customer_name,
-      shippingAddress: parsed.shipping_address ?? null,
+      shippingAddress: normalizeSheetShipping(parsed.shipping_address),
     };
   } catch {
     return {};
   }
 }
 
+/** Prefer sheet keys; accept older Shopify-shaped keys already in DB. */
+function normalizeSheetShipping(
+  raw: Record<string, string> | null | undefined
+): CreateDraftOrderShipping | null {
+  if (!raw) return null;
+  const address = (raw.address ?? raw.address1 ?? "").trim();
+  if (!address) return null;
+  return {
+    address,
+    pincode: (raw.pincode ?? raw.zip ?? "").trim(),
+    state: (raw.state ?? raw.province ?? "").trim(),
+    country: (raw.country ?? raw.countryCode ?? "IN").trim() || "IN",
+    city: (raw.city ?? "").trim() || undefined,
+  };
+}
+
 type CreateDraftOrderShipping = {
-  address1: string;
-  zip: string;
-  province: string;
-  countryCode: string;
+  address: string;
+  pincode: string;
+  state: string;
+  country: string;
   city?: string;
 };
 
@@ -321,6 +337,7 @@ export async function runRecoveryCallPipeline(
     draftOrderId,
     draftOrderName,
     draftOrderContext: draftOrderContextJson || undefined,
+    shippingAddress: sheetCtx.shippingAddress,
   });
 
   const sipResult = await dispatchSipCall({

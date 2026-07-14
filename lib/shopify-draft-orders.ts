@@ -85,10 +85,10 @@ export interface CreateDraftOrderInput {
   note?: string;
   customerName?: string;
   shippingAddress?: {
-    address1: string;
-    zip: string;
-    province: string;
-    countryCode: string;
+    address: string;
+    pincode: string;
+    state: string;
+    country: string;
     city?: string;
   } | null;
 }
@@ -268,15 +268,15 @@ function buildDraftInput(input: CreateDraftOrderInput) {
   if (input.email?.trim()) draftInput.email = input.email.trim();
   if (input.phone?.trim()) draftInput.phone = input.phone.trim();
 
-  if (input.shippingAddress?.address1) {
+  if (input.shippingAddress?.address) {
     const { firstName, lastName } = splitName(input.customerName || "");
     draftInput.shippingAddress = {
       firstName: firstName || undefined,
       lastName: lastName || undefined,
-      address1: input.shippingAddress.address1,
-      zip: input.shippingAddress.zip || undefined,
-      province: input.shippingAddress.province || undefined,
-      countryCode: input.shippingAddress.countryCode || "IN",
+      address1: input.shippingAddress.address,
+      zip: input.shippingAddress.pincode || undefined,
+      province: input.shippingAddress.state || undefined,
+      countryCode: input.shippingAddress.country || "IN",
       city: input.shippingAddress.city || undefined,
     };
   }
