@@ -140,7 +140,7 @@ type DraftOrderGraphNode = {
 };
 
 export function flattenDraftOrderContext(
-  draft: DraftOrderGraphNode
+  draft: DraftOrderGraphNode,
 ): DraftOrderContext {
   const lineItems = (draft.lineItems?.edges ?? []).map(({ node }) => ({
     title: node.title,
@@ -188,7 +188,7 @@ async function adminGraphql<T>(
   storeDomain: string,
   accessToken: string,
   query: string,
-  variables?: Record<string, unknown>
+  variables?: Record<string, unknown>,
 ): Promise<T> {
   const response = await fetch(
     `https://${storeDomain}/admin/api/${ADMIN_API_VERSION}/graphql.json`,
@@ -199,7 +199,7 @@ async function adminGraphql<T>(
         "X-Shopify-Access-Token": accessToken,
       },
       body: JSON.stringify({ query, variables }),
-    }
+    },
   );
 
   const body = await response.text();
@@ -285,8 +285,11 @@ function buildDraftInput(input: CreateDraftOrderInput) {
 }
 
 export async function createDraftOrderForStore(
-  store: Pick<Store, "storeDomain" | "apiKey" | "apiSecret" | "adminAccessToken">,
-  input: CreateDraftOrderInput
+  store: Pick<
+    Store,
+    "storeDomain" | "apiKey" | "apiSecret" | "adminAccessToken"
+  >,
+  input: CreateDraftOrderInput,
 ): Promise<CreateDraftOrderResult> {
   const { token } = await resolveStoreAdminAccessToken(store);
   const draftInput = buildDraftInput(input);
@@ -312,8 +315,11 @@ export async function createDraftOrderForStore(
 }
 
 export async function getDraftOrderContextForStore(
-  store: Pick<Store, "storeDomain" | "apiKey" | "apiSecret" | "adminAccessToken">,
-  draftOrderId: string
+  store: Pick<
+    Store,
+    "storeDomain" | "apiKey" | "apiSecret" | "adminAccessToken"
+  >,
+  draftOrderId: string,
 ): Promise<DraftOrderContext> {
   const { token } = await resolveStoreAdminAccessToken(store);
 

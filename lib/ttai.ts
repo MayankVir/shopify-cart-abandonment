@@ -16,6 +16,8 @@ export interface SipDynamicVars {
   draft_order_id?: string;
   draft_order_name?: string;
   draft_order_context?: string;
+  /** Pass to draftOrderComplete so the order stays unpaid (COD). */
+  payment_pending?: string;
 }
 
 export interface DispatchSipCallParams {
@@ -478,7 +480,10 @@ export function buildSipDynamicVars(input: {
   }
   if (input.cartId) vars.cart_id = input.cartId;
   if (input.checkoutUrl) vars.checkout_url = input.checkoutUrl;
-  if (input.draftOrderId) vars.draft_order_id = input.draftOrderId;
+  if (input.draftOrderId) {
+    vars.draft_order_id = input.draftOrderId;
+    vars.payment_pending = "true";
+  }
   if (input.draftOrderName) vars.draft_order_name = input.draftOrderName;
   if (input.draftOrderContext) vars.draft_order_context = input.draftOrderContext;
   return vars;
