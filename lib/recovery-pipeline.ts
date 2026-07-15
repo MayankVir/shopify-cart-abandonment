@@ -138,10 +138,20 @@ export async function runRecoveryCallPipeline(
       draftOrderId = draft.draftOrderId;
       draftOrderName = draft.draftOrderName;
 
-      await db.abandonedCheckout.update({
+      console.info(
+        `[recovery] Draft order created for checkout ${checkout.id}: draftOrderId=${draftOrderId} draftOrderName=${draftOrderName} (before SIP dispatch)`
+      );
+
+      const saved = await db.abandonedCheckout.update({
         where: { id: checkout.id },
         data: { draftOrderId, draftOrderName },
+        select: { id: true, draftOrderId: true, draftOrderName: true },
       });
+
+      console.info(
+        `[recovery] Persisted draft on AbandonedCheckout`,
+        JSON.stringify(saved)
+      );
     } else if (!hasDraftOrderId(draftOrderId) && !hasVariants) {
       await markFailure(
         checkout.id,
@@ -307,6 +317,10 @@ export async function runRecoveryCallPipeline(
     draftOrderContext: draftOrderContextJson || undefined,
     shippingAddress: sheetCtx.shippingAddress,
   });
+
+  console.info(
+    `[recovery] Dispatching SIP call for checkout ${checkout.id}: draftOrderId=${draftOrderId || "(none)"} phone=${phone}`
+  );
 
   const sipResult = await dispatchSipCall({
     phone,

@@ -120,9 +120,7 @@ function CheckoutDetail({
       {checkout.draftOrderId && (
         <p>
           <span className="text-muted-foreground">Draft order: </span>
-          <span className="font-mono text-xs">
-            {checkout.draftOrderName || checkout.draftOrderId}
-          </span>
+          <span className="font-mono text-xs">{checkout.draftOrderId}</span>
         </p>
       )}
       {checkout.checkoutUrl && (
@@ -161,12 +159,14 @@ function CheckoutDetail({
 function CheckoutRow({
   checkout,
   onRefresh,
+  onLiveRefresh,
   selectable,
   selected,
   onSelectedChange,
 }: {
   checkout: AbandonedCheckoutRow;
   onRefresh: () => void;
+  onLiveRefresh: () => void;
   selectable: boolean;
   selected: boolean;
   onSelectedChange: (selected: boolean) => void;
@@ -180,6 +180,19 @@ function CheckoutRow({
     if (!open) return;
     getCallAttemptsForCheckout(checkout.id).then(setAttempts);
   }, [open, checkout.id, checkout.callStatus]);
+
+  // The recovery pipeline writes draftOrderId to the DB well before the SIP
+  // call is dispatched, but `initiateRecoveryCall` only resolves once the
+  // whole pipeline finishes. Poll for a lightweight DB refresh while the
+  // request is in flight so the draft order shows up as soon as it's created,
+  // instead of only after the call has already been dispatched.
+  useEffect(() => {
+    if (!isPending) return;
+    const interval = setInterval(() => {
+      onLiveRefresh();
+    }, 2_000);
+    return () => clearInterval(interval);
+  }, [isPending, onLiveRefresh]);
 
   function handleStopCall() {
     startStopTransition(async () => {
@@ -260,9 +273,19 @@ function CheckoutRow({
           />
         </TableCell>
         <TableCell>
-          <Badge variant={STATUS_VARIANT[checkout.callStatus]}>
-            {formatCallStatus(checkout.callStatus)}
-          </Badge>
+          <div className="space-y-1">
+            <Badge variant={STATUS_VARIANT[checkout.callStatus]}>
+              {formatCallStatus(checkout.callStatus)}
+            </Badge>
+            {checkout.draftOrderId && (
+              <p
+                className="truncate font-mono text-[11px] text-muted-foreground"
+                title={checkout.draftOrderId}
+              >
+                {checkout.draftOrderId}
+              </p>
+            )}
+          </div>
         </TableCell>
         <TableCell className="text-right">
           <div className="flex items-center justify-end gap-2">
@@ -664,7 +687,12 @@ export function AbandonedCheckoutsPanel() {
                       <CheckoutRow
                         key={checkout.id}
                         checkout={checkout}
-                        onRefresh={runSync}
+                        onRefresh={() => {
+                          void refreshOpenCheckouts({ silent: true });
+                        }}
+                        onLiveRefresh={() =>
+                          refreshOpenCheckouts({ silent: true })
+                        }
                         selectable={selectable}
                         selected={selectedIds.has(checkout.id)}
                         onSelectedChange={(selected) =>

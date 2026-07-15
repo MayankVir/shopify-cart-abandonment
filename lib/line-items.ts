@@ -45,6 +45,33 @@ export function lineItemsHaveVariantId(items: LineItemRecord[]): boolean {
   return items.some((item) => item.variant_gid);
 }
 
+/** Stable compare for detecting real cart changes (ignores key order / extra fields). */
+export function lineItemsFingerprint(
+  items: LineItemRecord[] | unknown
+): string {
+  if (!Array.isArray(items)) return "[]";
+  return JSON.stringify(
+    (items as LineItemRecord[])
+      .map((item) => ({
+        variant_id: String(item?.variant_id ?? ""),
+        variant_gid: String(item?.variant_gid ?? ""),
+        quantity: Number(item?.quantity) || 1,
+      }))
+      .sort((a, b) =>
+        `${a.variant_gid}:${a.variant_id}`.localeCompare(
+          `${b.variant_gid}:${b.variant_id}`
+        )
+      )
+  );
+}
+
+export function lineItemsChanged(
+  previous: unknown,
+  next: LineItemRecord[]
+): boolean {
+  return lineItemsFingerprint(previous) !== lineItemsFingerprint(next);
+}
+
 export function buildCartLinesFromRecords(items: LineItemRecord[]) {
   return items
     .map((item) => {

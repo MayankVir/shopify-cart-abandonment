@@ -3,6 +3,7 @@ import { CallStatus, type Store } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   type LineItemRecord,
+  lineItemsChanged,
   mapWebhookLineItems,
   variantGidFromWebhook,
 } from "@/lib/line-items";
@@ -431,6 +432,7 @@ async function tryFetchCsv(url: string): Promise<{ ok: boolean; text: string; st
       headers: { Accept: "text/csv,text/plain,*/*" },
       cache: "no-store",
       redirect: "follow",
+      signal: AbortSignal.timeout(20_000),
     });
     const text = await response.text();
     const isHtml = text.trimStart().startsWith("<");
@@ -560,11 +562,21 @@ export async function syncAbandonedCheckoutsFromSheet(
       shipping_address: row.shippingAddress,
     });
 
-    const lineItemsChanged =
-      existing &&
-      JSON.stringify(existing.lineItemsJson) !== JSON.stringify(row.lineItems);
+    const shouldClearDraft =
+      Boolean(existing) &&
+      lineItemsChanged(existing!.lineItemsJson, row.lineItems);
 
     if (existing) {
+      if (shouldClearDraft && existing.draftOrderId) {
+        console.info(
+          "[sheet] clearing draftOrderId after line-item change",
+          JSON.stringify({
+            checkoutToken,
+            previousDraftOrderId: existing.draftOrderId,
+          })
+        );
+      }
+
       await db.abandonedCheckout.update({
         where: { id: existing.id },
         data: {
@@ -576,9 +588,11 @@ export async function syncAbandonedCheckoutsFromSheet(
           userContext,
           shopifyCreatedAt: abandonedAt ?? existing.shopifyCreatedAt,
           scheduledCallAt,
-          callScheduled: false,
+          // Keep existing callScheduled for rows already dialing / scheduled.
+          // Only force false when we had no active schedule marker before.
+          callScheduled: existing.callScheduled,
           storeDomain: store.storeDomain,
-          ...(lineItemsChanged
+          ...(shouldClearDraft
             ? { draftOrderId: "", draftOrderName: "" }
             : {}),
         },

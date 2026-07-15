@@ -292,6 +292,8 @@ function toCallLogEntry(c: CheckoutWithLatestAttempt): CallLogEntry {
     storeDomain: c.storeDomain,
     checkoutUrl: c.checkoutUrl,
     recoveryUrl: c.recoveryUrl,
+    draftOrderId: c.draftOrderId,
+    draftOrderName: c.draftOrderName,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
     latestAttempt: c.callAttempts[0]

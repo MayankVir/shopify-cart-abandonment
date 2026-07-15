@@ -176,23 +176,36 @@ export function serializeDraftOrderContext(context: DraftOrderContext): string {
   return JSON.stringify(context);
 }
 
+const ADMIN_API_TIMEOUT_MS = 20_000;
+
 async function adminGraphql<T>(
   storeDomain: string,
   accessToken: string,
   query: string,
   variables?: Record<string, unknown>,
 ): Promise<T> {
-  const response = await fetch(
-    `https://${storeDomain}/admin/api/${ADMIN_API_VERSION}/graphql.json`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": accessToken,
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://${storeDomain}/admin/api/${ADMIN_API_VERSION}/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopify-Access-Token": accessToken,
+        },
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(ADMIN_API_TIMEOUT_MS),
       },
-      body: JSON.stringify({ query, variables }),
-    },
-  );
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error(
+        `Admin API timed out after ${ADMIN_API_TIMEOUT_MS / 1000}s`,
+      );
+    }
+    throw error;
+  }
 
   const body = await response.text();
   if (!response.ok) {

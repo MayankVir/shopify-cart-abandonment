@@ -217,11 +217,20 @@ export async function dispatchSipCall(
     dynamic_vars: params.dynamicVars,
   };
 
-  const response = await fetch(cfg.endpoint, {
-    method: "POST",
-    headers: cfg.headers,
-    body: JSON.stringify(payload),
-  });
+  let response: Response;
+  try {
+    response = await fetch(cfg.endpoint, {
+      method: "POST",
+      headers: cfg.headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      return { success: false, error: "TTAI dispatch timed out after 20s" };
+    }
+    throw error;
+  }
 
   const body = await response.text();
   let parsed: {
@@ -268,10 +277,19 @@ export async function cancelSipCall(callId: string): Promise<CancelSipCallResult
 
   const cfg = getTTApiConfig();
   const baseUrl = cfg.endpoint.replace(/\/v2\/sip\/call$/, "");
-  const response = await fetch(`${baseUrl}/v2/sip/calls/${encodeURIComponent(callId)}`, {
-    method: "DELETE",
-    headers: cfg.headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/v2/sip/calls/${encodeURIComponent(callId)}`, {
+      method: "DELETE",
+      headers: cfg.headers,
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      return { success: false, error: "TTAI cancel timed out after 20s" };
+    }
+    throw error;
+  }
 
   const body = await response.text();
   let parsed: { deleted?: boolean; detail?: string; message?: string };

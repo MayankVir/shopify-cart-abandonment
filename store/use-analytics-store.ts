@@ -15,6 +15,8 @@ export interface CallLogEntry {
   storeDomain: string;
   checkoutUrl: string;
   recoveryUrl: string;
+  draftOrderId: string;
+  draftOrderName: string;
   createdAt: string;
   updatedAt: string;
   latestAttempt: {

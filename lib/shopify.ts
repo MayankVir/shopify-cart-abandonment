@@ -58,25 +58,34 @@ export async function createStorefrontCart(
   if (normalizedPhone) buyerIdentity.phone = normalizedPhone;
   if (normalizedEmail) buyerIdentity.email = normalizedEmail;
 
-  const response = await fetch(
-    `https://${storeDomain}/api/${STOREFRONT_API_VERSION}/graphql.json`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Storefront-Access-Token": token,
-      },
-      body: JSON.stringify({
-        query: CART_CREATE_MUTATION,
-        variables: {
-          input: {
-            lines,
-            buyerIdentity,
-          },
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://${storeDomain}/api/${STOREFRONT_API_VERSION}/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopify-Storefront-Access-Token": token,
         },
-      }),
+        body: JSON.stringify({
+          query: CART_CREATE_MUTATION,
+          variables: {
+            input: {
+              lines,
+              buyerIdentity,
+            },
+          },
+        }),
+        signal: AbortSignal.timeout(20_000),
+      }
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error("Storefront API timed out after 20s");
     }
-  );
+    throw error;
+  }
 
   if (!response.ok) {
     throw new Error(

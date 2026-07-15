@@ -43,14 +43,23 @@ export async function fetchUAgentsContext(
   const payload: Record<string, string> = { order_id: String(orderId).trim() };
   if (phoneNumber) payload.user_phone = phoneNumber;
 
-  const response = await fetch(cfg.endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${cfg.token}`,
-    },
-    body: JSON.stringify(payload),
-  });
+  let response: Response;
+  try {
+    response = await fetch(cfg.endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${cfg.token}`,
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error("uAgents request timed out after 20s");
+    }
+    throw error;
+  }
 
   const body = await response.text();
   let parsed: UAgentsContextResult;

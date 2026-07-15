@@ -130,7 +130,10 @@ function CallLogDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex flex-col overflow-hidden">
+      <SheetContent
+        side="right"
+        className="flex w-full flex-col overflow-hidden sm:max-w-xl lg:max-w-2xl"
+      >
         <SheetHeader className="shrink-0">
           <div className="flex flex-wrap items-start gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -178,6 +181,11 @@ function CallLogDetailSheet({
               <DetailField label="Duration">
                 {formatDuration(log.latestAttempt?.durationSec)}
               </DetailField>
+              {log.draftOrderId && (
+                <DetailField label="Draft order">
+                  <span className="font-mono text-xs">{log.draftOrderId}</span>
+                </DetailField>
+              )}
               {log.checkoutUrl && (
                 <DetailField label="Cart checkout" className="sm:col-span-2">
                   <a
