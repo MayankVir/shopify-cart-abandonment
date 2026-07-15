@@ -16,6 +16,12 @@ import {
   updateStoreRecoverySettings,
   updateStoreSheetSettings,
 } from "@/app/actions/abandoned-checkouts";
+import { startTimer } from "@/lib/perf-timer";
+
+function formatLatency(ms: number | null): string | null {
+  if (ms == null) return null;
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -57,6 +63,7 @@ export function RecoverySettings({
   const [isLoading, setIsLoading] = useState(false);
   const [loadedForDomain, setLoadedForDomain] = useState<string | null>(null);
   const [isPending, startSave] = useTransition();
+  const [settingsLatencyMs, setSettingsLatencyMs] = useState<number | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -69,8 +76,15 @@ export function RecoverySettings({
     let active = true;
     setIsLoading(true);
 
+    const elapsed = startTimer();
     getStoreRecoverySettings(storeDomain).then((settings) => {
       if (!active) return;
+      elapsed("client:getStoreRecoverySettings", {
+        storeDomain,
+        serverElapsedMs: settings?.elapsedMs,
+        found: Boolean(settings),
+      });
+      setSettingsLatencyMs(settings?.elapsedMs ?? null);
       if (!settings) {
         setIsLoading(false);
         return;
@@ -146,6 +160,11 @@ export function RecoverySettings({
           <DialogDescription>
             Configure how abandoned checkouts are synced and when calls are
             dispatched.
+            {!isLoading && settingsLatencyMs != null && (
+              <span className="ml-2 font-mono text-[11px] text-muted-foreground/70">
+                (loaded in {formatLatency(settingsLatencyMs)})
+              </span>
+            )}
           </DialogDescription>
         </DialogHeader>
 

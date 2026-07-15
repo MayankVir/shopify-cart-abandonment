@@ -42,6 +42,7 @@ import {
   syncAbandonedCheckoutsFromSheet,
 } from "@/lib/sheet-sync";
 import { formatShippingAddressFromUserContext } from "@/lib/shipping-address";
+import { startTimer } from "@/lib/perf-timer";
 
 const ARCHIVED_IN_SHOPIFY_MESSAGE = "Archived in Shopify admin";
 
@@ -109,6 +110,8 @@ export interface SyncResult {
   shopifyPageInfo?: AbandonedCheckoutsPageInfo;
   sheetPageInfo?: SheetPageInfo;
   error?: string;
+  /** Server-side latency for this sync call, in ms. */
+  elapsedMs?: number;
 }
 
 export interface SheetPageInfo {
@@ -128,6 +131,8 @@ export interface PaginatedCheckoutsResult {
   hasMore: boolean;
   totalCount: number;
   error?: string;
+  /** Server-side latency for this fetch, in ms. */
+  elapsedMs?: number;
 }
 
 export interface SyncOptions {
@@ -238,6 +243,7 @@ export async function getAbandonedCheckoutsForStore(
   storeDomain: string,
   page = 0
 ): Promise<PaginatedCheckoutsResult> {
+  const elapsed = startTimer();
   const { userId } = await auth();
   if (!userId) {
     return {
@@ -248,6 +254,7 @@ export async function getAbandonedCheckoutsForStore(
       hasMore: false,
       totalCount: 0,
       error: "Unauthorized",
+      elapsedMs: elapsed("getAbandonedCheckoutsForStore:unauthorized"),
     };
   }
 
@@ -261,18 +268,27 @@ export async function getAbandonedCheckoutsForStore(
       hasMore: false,
       totalCount: 0,
       error: "Store not found",
+      elapsedMs: elapsed("getAbandonedCheckoutsForStore:store_not_found", {
+        storeDomain,
+      }),
     };
   }
 
   const pageSize = checkoutListPageSize(store.checkoutSyncMode);
   const result = await fetchOpenCheckouts(storeDomain, page, pageSize);
-  return { success: true, ...result };
+  const elapsedMs = elapsed("getAbandonedCheckoutsForStore", {
+    storeDomain,
+    page,
+    count: result.checkouts.length,
+  });
+  return { success: true, ...result, elapsedMs };
 }
 
 export async function syncAbandonedCheckouts(
   storeDomain: string,
   options: SyncOptions = {}
 ): Promise<SyncResult> {
+  const elapsed = startTimer();
   const { userId } = await auth();
   if (!userId) {
     return {
@@ -280,6 +296,7 @@ export async function syncAbandonedCheckouts(
       checkouts: [],
       syncedAt: new Date().toISOString(),
       error: "Unauthorized",
+      elapsedMs: elapsed("syncAbandonedCheckouts:unauthorized"),
     };
   }
 
@@ -290,6 +307,9 @@ export async function syncAbandonedCheckouts(
       checkouts: [],
       syncedAt: new Date().toISOString(),
       error: "Store not found",
+      elapsedMs: elapsed("syncAbandonedCheckouts:store_not_found", {
+        storeDomain,
+      }),
     };
   }
 
@@ -306,16 +326,13 @@ export async function syncAbandonedCheckouts(
         SHEET_SYNC_PAGE_SIZE
       );
 
-      console.info(
-        "[sheet] abandoned checkouts synced",
-        JSON.stringify({
-          storeDomain,
-          page: sheetResult.page,
-          synced: sheetResult.synced,
-          skipped: sheetResult.skipped,
-          hasMore: sheetResult.hasMore,
-        })
-      );
+      const elapsedMs = elapsed("syncAbandonedCheckouts:sheet", {
+        storeDomain,
+        page: sheetResult.page,
+        synced: sheetResult.synced,
+        skipped: sheetResult.skipped,
+        hasMore: sheetResult.hasMore,
+      });
 
       return {
         success: true,
@@ -338,6 +355,7 @@ export async function syncAbandonedCheckouts(
           syncDirection: sheetResult.syncDirection,
           totalDataRows: sheetResult.totalDataRows,
         },
+        elapsedMs,
       };
     }
 
@@ -460,6 +478,13 @@ export async function syncAbandonedCheckouts(
     const pageResult = await fetchOpenCheckouts(storeDomain, dbPage);
     const tokenCache = getCachedAdminTokenInfo(storeDomain);
 
+    const elapsedMs = elapsed("syncAbandonedCheckouts:graphql", {
+      storeDomain,
+      syncMode,
+      count: pageResult.checkouts.length,
+      shopifyNodesProcessed: shopifyNodes.length,
+    });
+
     return {
       success: true,
       checkouts: pageResult.checkouts,
@@ -473,6 +498,7 @@ export async function syncAbandonedCheckouts(
       hasMore: pageResult.hasMore,
       totalCount: pageResult.totalCount,
       shopifyPageInfo,
+      elapsedMs,
     };
   } catch (error) {
     console.error("Sync abandoned checkouts failed:", error);
@@ -482,6 +508,7 @@ export async function syncAbandonedCheckouts(
       checkouts: [],
       syncedAt: new Date().toISOString(),
       error: raw,
+      elapsedMs: elapsed("syncAbandonedCheckouts:error", { storeDomain }),
     };
   }
 }
@@ -704,10 +731,11 @@ export async function updateStoreCheckoutSyncMode(
 }
 
 export async function getStoreRecoverySettings(storeDomain: string) {
+  const elapsed = startTimer();
   const { userId } = await auth();
   if (!userId) return null;
 
-  return db.store.findUnique({
+  const settings = await db.store.findUnique({
     where: { storeDomain },
     select: {
       storeDomain: true,
@@ -721,6 +749,13 @@ export async function getStoreRecoverySettings(storeDomain: string) {
       ttaiTrunkId: true,
     },
   });
+
+  const elapsedMs = elapsed("getStoreRecoverySettings", {
+    storeDomain,
+    found: Boolean(settings),
+  });
+
+  return settings ? { ...settings, elapsedMs } : null;
 }
 
 export async function updateStoreSheetSettings(

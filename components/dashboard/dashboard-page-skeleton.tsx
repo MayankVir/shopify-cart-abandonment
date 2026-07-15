@@ -61,6 +61,22 @@ export function TableCardSkeleton({ rows = 6 }: { rows?: number }) {
   );
 }
 
+/** Rows-only skeleton for embedding inside an already-rendered card/table shell. */
+export function RecoveryTableRowsSkeleton({ rows = 5 }: { rows?: number }) {
+  return (
+    <div>
+      <div className="space-y-0 border-b border-border px-4 py-3">
+        <Skeleton className="h-10 w-full" />
+      </div>
+      {Array.from({ length: rows }).map((_, index) => (
+        <div key={index} className="border-b border-border px-4 py-4 last:border-0">
+          <Skeleton className="h-5 w-full" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function RecoveryTableSkeleton() {
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">

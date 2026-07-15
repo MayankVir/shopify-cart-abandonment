@@ -48,8 +48,15 @@ import {
 } from "@/components/ui/table";
 import { RecoverySettings } from "@/components/dashboard/recovery-settings";
 import { TtaiCallDetails } from "@/components/dashboard/ttai-call-details";
+import { RecoveryTableRowsSkeleton } from "@/components/dashboard/dashboard-page-skeleton";
 import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
+import { startTimer } from "@/lib/perf-timer";
 import { CallStatus } from "@prisma/client";
+
+function formatLatency(ms: number | null): string | null {
+  if (ms == null) return null;
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
 
 function TimeToCallCell({
   scheduledCallAt,
@@ -341,6 +348,8 @@ export function AbandonedCheckoutsPanel() {
   );
   const [isLoadingMore, startLoadMore] = useTransition();
   const [isLoadingCheckouts, setIsLoadingCheckouts] = useState(false);
+  const [fetchLatencyMs, setFetchLatencyMs] = useState<number | null>(null);
+  const [syncLatencyMs, setSyncLatencyMs] = useState<number | null>(null);
 
   const stoppableCheckouts = checkouts.filter((checkout) =>
     canStopCall(checkout.callStatus, checkout.callScheduled),
@@ -368,17 +377,26 @@ export function AbandonedCheckoutsPanel() {
         setIsLoadingCheckouts(true);
       }
 
+      const elapsed = startTimer();
       try {
         const result = await getAbandonedCheckoutsForStore(
           selectedStoreDomain,
           0,
         );
+        elapsed("client:getAbandonedCheckoutsForStore", {
+          storeDomain: selectedStoreDomain,
+          serverElapsedMs: result.elapsedMs,
+          silent,
+        });
         if (!result.success) return;
 
         setCheckouts(result.checkouts);
         setDbPage(result.page);
         setHasMoreDb(result.hasMore);
         setTotalCount(result.totalCount);
+        if (!silent) {
+          setFetchLatencyMs(result.elapsedMs ?? null);
+        }
       } finally {
         if (!silent) {
           setIsLoadingCheckouts(false);
@@ -421,12 +439,18 @@ export function AbandonedCheckoutsPanel() {
     (options?: { shopifyAfter?: string | null; sheetPage?: number }) => {
       if (!selectedStoreDomain) return;
 
+      const elapsed = startTimer();
       startSync(async () => {
         const result = await syncAbandonedCheckouts(selectedStoreDomain, {
           shopifyAfter: options?.shopifyAfter,
           sheetPage: options?.sheetPage ?? 0,
           dbPage: 0,
         });
+        elapsed("client:syncAbandonedCheckouts", {
+          storeDomain: selectedStoreDomain,
+          serverElapsedMs: result.elapsedMs,
+        });
+        setSyncLatencyMs(result.elapsedMs ?? null);
         if (!result.success) {
           toast.error(result.error ?? "Failed to sync checkouts", {
             duration: 12_000,
@@ -544,10 +568,21 @@ export function AbandonedCheckoutsPanel() {
     <Card className="overflow-hidden border-border/60">
       <CardContent className="p-0">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-          <span className="text-xs text-muted-foreground">
-            {lastSyncedAt
-              ? `Last sync: ${new Date(lastSyncedAt).toLocaleString()}`
-              : "Not synced yet"}
+          <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+            <span>
+              {lastSyncedAt
+                ? `Last sync: ${new Date(lastSyncedAt).toLocaleString()}`
+                : "Not synced yet"}
+            </span>
+            {(fetchLatencyMs != null || syncLatencyMs != null) && (
+              <span className="font-mono text-[11px] text-muted-foreground/70">
+                {syncLatencyMs != null &&
+                  `sync ${formatLatency(syncLatencyMs)}`}
+                {syncLatencyMs != null && fetchLatencyMs != null && " · "}
+                {fetchLatencyMs != null &&
+                  `load ${formatLatency(fetchLatencyMs)}`}
+              </span>
+            )}
           </span>
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -584,12 +619,7 @@ export function AbandonedCheckoutsPanel() {
           </div>
         )}
         {isLoadingCheckouts ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-16">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              Loading abandoned checkouts…
-            </p>
-          </div>
+          <RecoveryTableRowsSkeleton />
         ) : checkouts.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-sm text-muted-foreground">
