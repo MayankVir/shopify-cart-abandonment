@@ -36,19 +36,12 @@ function parseLineItems(json: Prisma.JsonValue): LineItemRecord[] {
 }
 
 function sheetContextFromUserContext(userContext: string): {
-  customerName?: string;
   shippingAddress?: ShippingAddressFields | null;
 } {
   if (!userContext.trim()) return {};
-  try {
-    const parsed = JSON.parse(userContext) as { customer_name?: string };
-    return {
-      customerName: parsed.customer_name,
-      shippingAddress: parseShippingAddressFromUserContext(userContext),
-    };
-  } catch {
-    return {};
-  }
+  return {
+    shippingAddress: parseShippingAddressFromUserContext(userContext),
+  };
 }
 
 async function markFailure(
@@ -140,8 +133,6 @@ export async function runRecoveryCallPipeline(
         phone,
         email: checkout.customerEmail ?? undefined,
         checkoutToken: checkout.checkoutToken,
-        customerName: sheetCtx.customerName,
-        shippingAddress: sheetCtx.shippingAddress,
       });
 
       draftOrderId = draft.draftOrderId;

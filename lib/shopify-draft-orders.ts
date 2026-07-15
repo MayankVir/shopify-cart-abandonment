@@ -83,14 +83,6 @@ export interface CreateDraftOrderInput {
   email?: string;
   checkoutToken?: string;
   note?: string;
-  customerName?: string;
-  shippingAddress?: {
-    address: string;
-    pincode: string;
-    state: string;
-    country: string;
-    city?: string;
-  } | null;
 }
 
 export function hasDraftOrderId(id: string | null | undefined): boolean {
@@ -230,16 +222,6 @@ function assertUserErrors(label: string, userErrors: UserError[] | undefined) {
   throw new Error(`${label}: ${detail}`);
 }
 
-function splitName(fullName: string): { firstName: string; lastName: string } {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return { firstName: "", lastName: "" };
-  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
-  return {
-    firstName: parts[0],
-    lastName: parts.slice(1).join(" "),
-  };
-}
-
 function buildDraftInput(input: CreateDraftOrderInput) {
   const lineItems = input.lineItems
     .filter((item) => item.variant_gid)
@@ -267,19 +249,6 @@ function buildDraftInput(input: CreateDraftOrderInput) {
 
   if (input.email?.trim()) draftInput.email = input.email.trim();
   if (input.phone?.trim()) draftInput.phone = input.phone.trim();
-
-  if (input.shippingAddress?.address) {
-    const { firstName, lastName } = splitName(input.customerName || "");
-    draftInput.shippingAddress = {
-      firstName: firstName || undefined,
-      lastName: lastName || undefined,
-      address1: input.shippingAddress.address,
-      zip: input.shippingAddress.pincode || undefined,
-      province: input.shippingAddress.state || undefined,
-      countryCode: input.shippingAddress.country || "IN",
-      city: input.shippingAddress.city || undefined,
-    };
-  }
 
   return draftInput;
 }
