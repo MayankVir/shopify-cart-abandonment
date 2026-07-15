@@ -41,6 +41,7 @@ import {
   SHEET_SYNC_PAGE_SIZE,
   syncAbandonedCheckoutsFromSheet,
 } from "@/lib/sheet-sync";
+import { formatShippingAddressFromUserContext } from "@/lib/shipping-address";
 
 const ARCHIVED_IN_SHOPIFY_MESSAGE = "Archived in Shopify admin";
 
@@ -81,6 +82,7 @@ export interface AbandonedCheckoutRow {
   draftOrderId: string;
   draftOrderName: string;
   recoveryUrl: string;
+  address: string;
   callScheduled: boolean;
   scheduledCallAt: string | null;
   shopifyCreatedAt: string | null;
@@ -171,6 +173,7 @@ function toRow(
     draftOrderId: c.draftOrderId,
     draftOrderName: c.draftOrderName,
     recoveryUrl: c.recoveryUrl,
+    address: formatShippingAddressFromUserContext(c.userContext),
     callScheduled: c.callScheduled,
     scheduledCallAt: c.scheduledCallAt?.toISOString() ?? null,
     shopifyCreatedAt: c.shopifyCreatedAt?.toISOString() ?? null,

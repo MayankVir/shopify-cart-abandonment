@@ -1,4 +1,5 @@
 import { normalizePhoneNumber } from "./phone";
+import { formatShippingAddress } from "./shipping-address";
 
 const DEFAULT_TT_BASE_URL = "https://api.toughtongueai.com/api/public";
 
@@ -495,14 +496,8 @@ export function buildSipDynamicVars(input: {
   if (input.draftOrderName) vars.draft_order_name = input.draftOrderName;
   if (input.draftOrderContext) vars.draft_order_context = input.draftOrderContext;
 
-  const addr = input.shippingAddress;
-  if (addr) {
-    const address = [addr.address, addr.pincode, addr.state, addr.country]
-      .map((part) => part?.trim())
-      .filter(Boolean)
-      .join(", ");
-    if (address) vars.address = address;
-  }
+  const address = formatShippingAddress(input.shippingAddress ?? null);
+  if (address) vars.address = address;
 
   return vars;
 }

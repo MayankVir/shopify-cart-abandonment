@@ -246,6 +246,13 @@ function CheckoutRow({
         <TableCell className="font-medium">
           {formatCurrency(checkout.cartValue)}
         </TableCell>
+        <TableCell className="max-w-[220px]">
+          <p className="truncate text-sm" title={checkout.address || undefined}>
+            {checkout.address || (
+              <span className="text-muted-foreground">—</span>
+            )}
+          </p>
+        </TableCell>
         <TableCell>
           <TimeToCallCell
             scheduledCallAt={checkout.scheduledCallAt}
@@ -303,7 +310,7 @@ function CheckoutRow({
       </TableRow>
       {open && (
         <TableRow>
-          <TableCell colSpan={7}>
+          <TableCell colSpan={8}>
             <CheckoutDetail checkout={checkout} attempts={attempts} />
           </TableCell>
         </TableRow>
@@ -640,6 +647,7 @@ export function AbandonedCheckoutsPanel() {
                     </TableHead>
                     <TableHead>Customer</TableHead>
                     <TableHead>Value</TableHead>
+                    <TableHead>Address</TableHead>
                     <TableHead>Time to call</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Action</TableHead>

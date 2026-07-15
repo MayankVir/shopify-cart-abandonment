@@ -15,6 +15,10 @@ import { createStorefrontCart } from "@/lib/shopify";
 import { fetchUAgentsContext, isUAgentsConfigured } from "@/lib/uagents";
 import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
 import { buildSipDynamicVars, cancelSipCall, dispatchSipCall } from "@/lib/ttai";
+import {
+  parseShippingAddressFromUserContext,
+  type ShippingAddressFields,
+} from "@/lib/shipping-address";
 
 export type RecoveryTrigger = "manual" | "auto";
 
@@ -33,46 +37,19 @@ function parseLineItems(json: Prisma.JsonValue): LineItemRecord[] {
 
 function sheetContextFromUserContext(userContext: string): {
   customerName?: string;
-  shippingAddress?: CreateDraftOrderShipping | null;
+  shippingAddress?: ShippingAddressFields | null;
 } {
   if (!userContext.trim()) return {};
   try {
-    const parsed = JSON.parse(userContext) as {
-      customer_name?: string;
-      shipping_address?: Record<string, string> | null;
-    };
+    const parsed = JSON.parse(userContext) as { customer_name?: string };
     return {
       customerName: parsed.customer_name,
-      shippingAddress: normalizeSheetShipping(parsed.shipping_address),
+      shippingAddress: parseShippingAddressFromUserContext(userContext),
     };
   } catch {
     return {};
   }
 }
-
-/** Prefer sheet keys; accept older Shopify-shaped keys already in DB. */
-function normalizeSheetShipping(
-  raw: Record<string, string> | null | undefined
-): CreateDraftOrderShipping | null {
-  if (!raw) return null;
-  const address = (raw.address ?? raw.address1 ?? "").trim();
-  if (!address) return null;
-  return {
-    address,
-    pincode: (raw.pincode ?? raw.zip ?? "").trim(),
-    state: (raw.state ?? raw.province ?? "").trim(),
-    country: (raw.country ?? raw.countryCode ?? "IN").trim() || "IN",
-    city: (raw.city ?? "").trim() || undefined,
-  };
-}
-
-type CreateDraftOrderShipping = {
-  address: string;
-  pincode: string;
-  state: string;
-  country: string;
-  city?: string;
-};
 
 async function markFailure(
   checkoutId: string,
