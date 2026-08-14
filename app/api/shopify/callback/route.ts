@@ -2,6 +2,28 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptToken } from "@/lib/encryption";
 import { fetchShopName } from "@/lib/shopify-admin";
+import { ensureMerchantForUser } from "@/lib/billing";
+import { normalizeStoreDomain } from "@/lib/store-domain";
+
+function decodeOAuthState(state: string): {
+  userId: string;
+  storeDomain: string;
+} | null {
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(state, "base64url").toString("utf8")
+    ) as { userId?: string; storeDomain?: string };
+
+    if (!parsed.userId || !parsed.storeDomain) return null;
+
+    return {
+      userId: parsed.userId,
+      storeDomain: normalizeStoreDomain(parsed.storeDomain),
+    };
+  } catch {
+    return null;
+  }
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
@@ -14,6 +36,11 @@ export async function GET(request: NextRequest) {
       { error: "Missing OAuth parameters" },
       { status: 400 }
     );
+  }
+
+  const oauthState = decodeOAuthState(state);
+  if (!oauthState) {
+    return NextResponse.json({ error: "Invalid OAuth state" }, { status: 400 });
   }
 
   const apiKey = process.env.SHOPIFY_API_KEY;
@@ -50,20 +77,29 @@ export async function GET(request: NextRequest) {
 
   const storeDomain = shop.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
+  if (oauthState.storeDomain !== storeDomain) {
+    return NextResponse.json(
+      { error: "OAuth state store mismatch" },
+      { status: 400 }
+    );
+  }
+
+  await ensureMerchantForUser(oauthState.userId);
+
   await db.store.upsert({
     where: { storeDomain },
     create: {
       storeDomain,
+      clerkUserId: oauthState.userId,
       adminAccessToken: encryptToken(tokenData.access_token),
       storefrontToken: encryptToken(""),
     },
     update: {
+      clerkUserId: oauthState.userId,
       adminAccessToken: encryptToken(tokenData.access_token),
     },
   });
 
-  // Best-effort: fetch the merchant-facing shop name so the dashboard can show
-  // something friendlier than the raw domain. Never block the redirect on this.
   try {
     const shopName = await fetchShopName(storeDomain, tokenData.access_token);
     if (shopName) {

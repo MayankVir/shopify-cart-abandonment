@@ -12,6 +12,7 @@ import {
 import { getLastWebhookDebug, type WebhookDebugInfo } from "@/lib/store-domain";
 import { db } from "@/lib/db";
 import { runRecoveryCallPipeline, processScheduledCallsForStore, stopRecoveryCall } from "@/lib/recovery-pipeline";
+import { assertStoreAccess, StoreAccessError } from "@/lib/store-access";
 import {
   ABANDONED_CHECKOUTS_PAGE_SIZE,
   checkoutTokenFromNode,
@@ -41,6 +42,15 @@ import {
   SHEET_SYNC_PAGE_SIZE,
   syncAbandonedCheckoutsFromSheet,
 } from "@/lib/sheet-sync";
+
+async function guardStoreAccess(storeDomain: string): Promise<string | null> {
+  try {
+    await assertStoreAccess(storeDomain);
+    return null;
+  } catch (error) {
+    return error instanceof StoreAccessError ? error.message : "Forbidden";
+  }
+}
 import { formatShippingAddressFromUserContext } from "@/lib/shipping-address";
 
 const ARCHIVED_IN_SHOPIFY_MESSAGE = "Archived in Shopify admin";
@@ -251,6 +261,19 @@ export async function getAbandonedCheckoutsForStore(
     };
   }
 
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return {
+      success: false,
+      checkouts: [],
+      page,
+      pageSize: ABANDONED_CHECKOUTS_PAGE_SIZE,
+      hasMore: false,
+      totalCount: 0,
+      error: accessError,
+    };
+  }
+
   const store = await db.store.findUnique({ where: { storeDomain } });
   if (!store) {
     return {
@@ -280,6 +303,16 @@ export async function syncAbandonedCheckouts(
       checkouts: [],
       syncedAt: new Date().toISOString(),
       error: "Unauthorized",
+    };
+  }
+
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return {
+      success: false,
+      checkouts: [],
+      syncedAt: new Date().toISOString(),
+      error: accessError,
     };
   }
 
@@ -506,6 +539,11 @@ export async function initiateRecoveryCall(
 
   if (!checkout) {
     return { success: false, error: "Checkout not found" };
+  }
+
+  const accessError = await guardStoreAccess(checkout.storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
   }
 
   if (!isRetryableStatus(checkout.callStatus)) {

@@ -12,7 +12,7 @@ import {
   Truck,
   type LucideIcon,
 } from "lucide-react";
-import { SidebarUser } from "@/components/dashboard/sidebar-user";
+import { SidebarUser, type SidebarAccountSummary } from "@/components/dashboard/sidebar-user";
 import {
   Sidebar,
   SidebarContent,
@@ -30,6 +30,7 @@ import {
 
 interface AppSidebarProps {
   showAdminLink?: boolean;
+  account: SidebarAccountSummary | null;
 }
 
 const MAIN_NAV = [
@@ -70,7 +71,7 @@ function NavItems({
   );
 }
 
-export function AppSidebar({ showAdminLink = false }: AppSidebarProps) {
+export function AppSidebar({ showAdminLink = false, account }: AppSidebarProps) {
   const pathname = usePathname();
 
   const isActive = (href: string) =>
@@ -138,7 +139,7 @@ export function AppSidebar({ showAdminLink = false }: AppSidebarProps) {
 
       <SidebarFooter>
         <SidebarSeparator />
-        <SidebarUser />
+        <SidebarUser account={account} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

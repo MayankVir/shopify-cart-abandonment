@@ -15,6 +15,7 @@ import { createStorefrontCart } from "@/lib/shopify";
 import { fetchUAgentsContext, isUAgentsConfigured } from "@/lib/uagents";
 import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
 import { buildSipDynamicVars, cancelSipCall, dispatchSipCall } from "@/lib/ttai";
+import { hasBillableMinutes } from "@/lib/billing";
 import {
   parseShippingAddressFromUserContext,
   type ShippingAddressFields,
@@ -94,6 +95,13 @@ export async function runRecoveryCallPipeline(
 
   if (checkout.callStatus === CallStatus.COMPLETED) {
     return { success: false, error: "Checkout already recovered" };
+  }
+
+  if (checkout.store.clerkUserId) {
+    const billing = await hasBillableMinutes(checkout.store.clerkUserId);
+    if (!billing.allowed) {
+      return { success: false, error: billing.reason ?? "Insufficient call minutes" };
+    }
   }
 
   const attempt = await db.callAttempt.create({
@@ -316,6 +324,9 @@ export async function runRecoveryCallPipeline(
     draftOrderName,
     draftOrderContext: draftOrderContextJson || undefined,
     shippingAddress: sheetCtx.shippingAddress,
+    voiceGreeting: checkout.store.voiceGreeting || undefined,
+    voiceDiscountOffer: checkout.store.voiceDiscountOffer || undefined,
+    voiceInstructions: checkout.store.voiceInstructions || undefined,
   });
 
   console.info(

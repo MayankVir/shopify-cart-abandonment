@@ -4,6 +4,10 @@ import { Webhook } from "standardwebhooks";
 import { db } from "@/lib/db";
 import { mapTtaiStatusToCallStatus, buildSessionSummary, fetchTtaiSessionDetails, durationSecFromTtaiSession } from "@/lib/ttai";
 import {
+  minutesFromDurationSec,
+  recordCallUsage,
+} from "@/lib/billing";
+import {
   asRecord,
   attachSessionDetailsToStore,
   eventData,
@@ -118,15 +122,78 @@ export async function POST(request: NextRequest) {
         sessionId ? { sessionId } : undefined,
       ].filter(Boolean) as Prisma.CallAttemptWhereInput[],
     },
-    include: { checkout: true },
+    include: { checkout: { include: { store: true } } },
   });
 
   if (!attempt) {
-    console.warn(
-      "[ttai-webhook] no matching attempt",
-      JSON.stringify({ event, sessionId, callId })
-    );
-    return NextResponse.json({ ok: true, action: "ignored", reason: "attempt not found" });
+    const ndrcAttempt = await db.ndrcCallAttempt.findFirst({
+      where: {
+        OR: [
+          callId ? { callId } : undefined,
+          sessionId ? { sessionId } : undefined,
+        ].filter(Boolean) as Prisma.NdrcCallAttemptWhereInput[],
+      },
+      include: { order: { include: { store: true } } },
+    });
+
+    if (!ndrcAttempt) {
+      console.warn(
+        "[ttai-webhook] no matching attempt",
+        JSON.stringify({ event, sessionId, callId })
+      );
+      return NextResponse.json({ ok: true, action: "ignored", reason: "attempt not found" });
+    }
+
+    const rawStatus = mapEventToStatus(event, dataForExtraction);
+    const mappedStatus = mapTtaiStatusToCallStatus(rawStatus);
+    const updateStatus = shouldUpdateTerminalStatus(event);
+    const isTerminal = updateStatus && mappedStatus !== "DISPATCH_FAILED";
+    const endedAt = isTerminal ? new Date() : ndrcAttempt.endedAt;
+    const durationSec =
+      pickNumber(
+        dataForExtraction.duration_sec,
+        dataForExtraction.duration_seconds,
+        payload.duration_sec
+      ) ??
+      (endedAt
+        ? Math.round((endedAt.getTime() - ndrcAttempt.startedAt.getTime()) / 1000)
+        : ndrcAttempt.durationSec);
+
+    await db.$transaction([
+      db.ndrcCallAttempt.update({
+        where: { id: ndrcAttempt.id },
+        data: {
+          status: updateStatus ? mappedStatus : ndrcAttempt.status,
+          sessionId: sessionId || ndrcAttempt.sessionId,
+          endedAt,
+          durationSec,
+        },
+      }),
+      db.ndrcOrder.update({
+        where: { id: ndrcAttempt.ndrcOrderId },
+        data: {
+          callStatus: updateStatus ? mappedStatus : ndrcAttempt.order.callStatus,
+          sessionId: sessionId || ndrcAttempt.sessionId,
+        },
+      }),
+    ]);
+
+    if (isTerminal && ndrcAttempt.order.store.clerkUserId && durationSec) {
+      await recordCallUsage({
+        clerkUserId: ndrcAttempt.order.store.clerkUserId,
+        minutes: minutesFromDurationSec(durationSec),
+        callType: "ndrc",
+        storeDomain: ndrcAttempt.order.storeDomain,
+        sourceId: ndrcAttempt.id,
+        occurredAt: endedAt ?? new Date(),
+      });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      action: "ndrc_updated",
+      status: mappedStatus,
+    });
   }
 
   if (
@@ -284,6 +351,22 @@ export async function POST(request: NextRequest) {
       },
     }),
   ]);
+
+  if (
+    isTerminal &&
+    attempt.checkout.store.clerkUserId &&
+    durationSec &&
+    attempt.trigger !== "test"
+  ) {
+    await recordCallUsage({
+      clerkUserId: attempt.checkout.store.clerkUserId,
+      minutes: minutesFromDurationSec(durationSec),
+      callType: "recovery",
+      storeDomain: attempt.checkout.storeDomain,
+      sourceId: attempt.id,
+      occurredAt: endedAt ?? new Date(),
+    });
+  }
 
   return NextResponse.json({
     ok: true,

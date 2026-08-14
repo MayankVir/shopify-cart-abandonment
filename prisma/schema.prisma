@@ -19,9 +19,75 @@ enum SheetSyncDirection {
   BOTTOM
 }
 
+enum TopUpStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model Merchant {
+  clerkUserId        String             @id
+  email              String?
+  dodoCustomerId     String?            @unique
+  balanceMinutes     Decimal            @default(0) @db.Decimal(10, 2)
+  freeMinutesGranted Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  stores             Store[]
+  adminCreditGrants  AdminCreditGrant[]
+  topUps             BillingTopUp[]
+}
+
+model BillingTopUp {
+  id               String      @id @default(uuid())
+  clerkUserId      String
+  amountUsd        Decimal     @db.Decimal(10, 2)
+  minutesToGrant   Decimal     @db.Decimal(10, 2)
+  ratePerMinuteUsd Decimal     @db.Decimal(10, 4)
+  status           TopUpStatus @default(PENDING)
+  dodoSessionId    String?
+  dodoPaymentId    String?     @unique
+  createdAt        DateTime    @default(now())
+  completedAt      DateTime?
+
+  merchant Merchant @relation(fields: [clerkUserId], references: [clerkUserId], onDelete: Cascade)
+
+  @@index([clerkUserId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model BillingConfig {
+  id                  String   @id @default("default")
+  ratePerMinuteUsd    Decimal  @default(0.08) @db.Decimal(10, 4)
+  freeMinutesOnSignup Int      @default(25)
+  maxGrantPerAction   Int      @default(500)
+  currency            String   @default("USD")
+  updatedAt           DateTime @updatedAt
+}
+
+model AdminCreditGrant {
+  id             String   @id @default(uuid())
+  clerkUserId    String
+  minutesGranted Decimal  @db.Decimal(10, 2)
+  reason         String   @db.Text
+  grantedByEmail String
+  dodoLedgerId   String?
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now())
+
+  merchant Merchant @relation(fields: [clerkUserId], references: [clerkUserId], onDelete: Cascade)
+
+  @@index([clerkUserId])
+  @@index([createdAt])
+}
+
 model Store {
   id               String              @id @default(uuid())
   storeDomain      String              @unique
+  clerkUserId      String?
+  merchant         Merchant?           @relation(fields: [clerkUserId], references: [clerkUserId], onDelete: Cascade)
   /** Shopify shop display name (e.g. "Acme Store"), fetched from Admin API after connect. */
   name             String?
   apiKey           String?
@@ -48,10 +114,16 @@ model Store {
   lastNdrcSheetSyncAt  DateTime?
   ndrcTtaiScenarioId   String?
   ndrcTtaiTrunkId      String?
+  voiceGreeting        String             @default("") @db.Text
+  voiceDiscountOffer   String             @default("") @db.Text
+  voiceInstructions    String             @default("") @db.Text
+  voicePromptJson      Json               @default("{}")
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
   checkouts        AbandonedCheckout[]
   ndrcOrders       NdrcOrder[]
+
+  @@index([clerkUserId])
 }
 
 model AbandonedCheckout {
@@ -177,4 +249,20 @@ model NdrcCallAttempt {
   @@index([callId])
   @@index([sessionId])
   @@index([status])
+}
+
+model UsageEventOutbox {
+  id          String    @id @default(uuid())
+  eventId     String    @unique
+  clerkUserId String
+  minutes     Decimal   @db.Decimal(10, 2)
+  callType    String
+  storeDomain String
+  sourceId    String
+  occurredAt  DateTime
+  ingestedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([clerkUserId])
+  @@index([ingestedAt])
 }

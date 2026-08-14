@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { BillingPanel } from "@/components/dashboard/billing-panel";
 
 export default function BillingPage() {
@@ -6,11 +7,13 @@ export default function BillingPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Billing</h1>
         <p className="mt-1 text-muted-foreground">
-          Track call minutes consumed via Tough Tongue AI sessions
+          Manage your call minute balance and view usage
         </p>
       </div>
 
-      <BillingPanel />
+      <Suspense fallback={null}>
+        <BillingPanel />
+      </Suspense>
     </div>
   );
 }

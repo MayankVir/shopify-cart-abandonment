@@ -506,6 +506,9 @@ export function buildSipDynamicVars(input: {
     state?: string;
     country?: string;
   } | null;
+  voiceGreeting?: string;
+  voiceDiscountOffer?: string;
+  voiceInstructions?: string;
 }): SipDynamicVars {
   const vars: SipDynamicVars = {
     order_id: input.orderId,
@@ -530,6 +533,9 @@ export function buildSipDynamicVars(input: {
 
   const address = formatShippingAddress(input.shippingAddress ?? null);
   if (address) vars.address = address;
+  if (input.voiceGreeting) vars.greeting_script = input.voiceGreeting;
+  if (input.voiceDiscountOffer) vars.discount_offer = input.voiceDiscountOffer;
+  if (input.voiceInstructions) vars.agent_instructions = input.voiceInstructions;
 
   return vars;
 }

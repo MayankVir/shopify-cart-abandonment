@@ -1,25 +1,72 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { UserButton, useUser } from "@clerk/nextjs";
+import { refreshMerchantCreditBalance } from "@/app/actions/billing";
 import {
   SidebarMenu,
-  SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 
-export function SidebarUser() {
+export interface SidebarAccountSummary {
+  creditBalanceMinutes: number;
+  ratePerMinuteUsd: number;
+  currency: string;
+  storeCount: number;
+  freeMinutesGranted: boolean;
+  isAdmin: boolean;
+}
+
+interface SidebarUserProps {
+  account: SidebarAccountSummary | null;
+}
+
+function formatMinutes(value: number): string {
+  return value.toFixed(2);
+}
+
+export function SidebarUser({ account }: SidebarUserProps) {
   const { user, isLoaded } = useUser();
+  const { state } = useSidebar();
+  const collapsed = state === "collapsed";
+
+  const [minutes, setMinutes] = useState<number>(
+    account?.creditBalanceMinutes ?? 0
+  );
+
+  useEffect(() => {
+    setMinutes(account?.creditBalanceMinutes ?? 0);
+  }, [account?.creditBalanceMinutes]);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    const refresh = () => {
+      refreshMerchantCreditBalance().then((balance) => {
+        setMinutes(balance);
+      });
+    };
+
+    refresh();
+    const id = setInterval(refresh, 30_000);
+    return () => clearInterval(id);
+  }, [isLoaded]);
 
   if (!isLoaded) {
     return (
       <SidebarMenu>
         <SidebarMenuItem>
-          <div className="flex items-center gap-2 px-2 py-1.5">
-            <Skeleton className="size-8 rounded-lg" />
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <Skeleton className="h-3.5 w-24" />
-              <Skeleton className="h-3 w-32" />
+          <div className="flex flex-col gap-2 px-2 py-1.5">
+            <Skeleton className="h-9 w-full rounded-md" />
+            <div className="flex items-center gap-2.5">
+              <Skeleton className="size-9 shrink-0 rounded-full" />
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <Skeleton className="h-3.5 w-24" />
+                <Skeleton className="h-3 w-32" />
+              </div>
             </div>
           </div>
         </SidebarMenuItem>
@@ -32,20 +79,60 @@ export function SidebarUser() {
     user?.emailAddresses[0]?.emailAddress ??
     "";
   const name =
-    user?.fullName ?? user?.firstName ?? email.split("@")[0] ?? "Account";
+    user?.fullName?.trim() ||
+    [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
+    email.split("@")[0] ||
+    "Account";
+  const username = user?.username ? `@${user.username}` : null;
 
   return (
     <SidebarMenu>
-      <SidebarMenuItem>
-        <SidebarMenuButton size="lg" className="cursor-default hover:bg-transparent">
-          <UserButton afterSignOutUrl="/sign-in" />
-          <div className="grid flex-1 text-left text-sm leading-tight">
-            <span className="truncate font-semibold">{name}</span>
-            <span className="truncate text-xs text-sidebar-foreground/60">
-              {email}
+      {!collapsed && account ? (
+        <SidebarMenuItem>
+          <Link
+            href="/dashboard/billing"
+            className="mb-2 flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-sidebar-accent"
+          >
+            <span className="text-sidebar-foreground/70">Minutes left</span>
+            <span className="font-semibold tabular-nums text-sidebar-foreground">
+              {formatMinutes(minutes)}
             </span>
-          </div>
-        </SidebarMenuButton>
+          </Link>
+        </SidebarMenuItem>
+      ) : null}
+
+      <SidebarMenuItem>
+        <div
+          className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 ${
+            collapsed ? "justify-center" : ""
+          }`}
+        >
+          <UserButton
+            afterSignOutUrl="/sign-in"
+            appearance={{
+              elements: {
+                avatarBox: "h-9 w-9",
+              },
+            }}
+          />
+          {!collapsed ? (
+            <div className="min-w-0 flex-1 leading-tight">
+              <p className="truncate text-sm font-semibold text-sidebar-foreground">
+                {name}
+              </p>
+              {email ? (
+                <p className="truncate text-xs text-sidebar-foreground/60">
+                  {email}
+                </p>
+              ) : null}
+              {username ? (
+                <p className="truncate text-[11px] text-sidebar-foreground/45">
+                  {username}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </SidebarMenuItem>
     </SidebarMenu>
   );

@@ -6,20 +6,24 @@ import { AppTopBar } from "@/components/dashboard/app-top-bar";
 import { DashboardHydrator } from "@/components/dashboard/dashboard-hydrator";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 
+import type { SidebarAccountSummary } from "@/components/dashboard/sidebar-user";
+
 interface DashboardShellProps {
   children: React.ReactNode;
   stores: Awaited<ReturnType<typeof getStoresForDashboard>>;
   showAdminLink?: boolean;
+  account: SidebarAccountSummary | null;
 }
 
 export function DashboardShell({
   children,
   stores,
   showAdminLink = false,
+  account,
 }: DashboardShellProps) {
   return (
     <SidebarProvider>
-      <AppSidebar showAdminLink={showAdminLink} />
+      <AppSidebar showAdminLink={showAdminLink} account={account} />
       <SidebarInset>
         <DashboardHydrator initialStores={stores} />
         <AppTopBar stores={stores} />

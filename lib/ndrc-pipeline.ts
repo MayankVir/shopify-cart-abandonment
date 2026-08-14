@@ -2,6 +2,7 @@ import { CallStatus, Prisma, type NdrcOrder, type Store } from "@prisma/client";
 import { db } from "@/lib/db";
 import { normalizePhoneNumber } from "@/lib/phone";
 import { parseShippingAddressFromUserContext } from "@/lib/shipping-address";
+import { hasBillableMinutes } from "@/lib/billing";
 import { buildNdrcSipDynamicVars, cancelSipCall, dispatchSipCall } from "@/lib/ttai";
 
 export type NdrcTrigger = "manual";
@@ -54,6 +55,13 @@ export async function runNdrcCallPipeline(
 
   if (order.callStatus === CallStatus.COMPLETED) {
     return { success: false, error: "Order already confirmed" };
+  }
+
+  if (order.store.clerkUserId) {
+    const billing = await hasBillableMinutes(order.store.clerkUserId);
+    if (!billing.allowed) {
+      return { success: false, error: billing.reason ?? "Insufficient call minutes" };
+    }
   }
 
   const attempt = await db.ndrcCallAttempt.create({

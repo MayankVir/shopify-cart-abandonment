@@ -23,6 +23,13 @@ import {
 import {
   resolveAdminAccessTokenFromPlainCredentials,
 } from "@/lib/shopify-admin-token";
+import { ensureMerchantForUser } from "@/lib/billing";
+import {
+  assertStoreAccess,
+  getStoresForUser,
+  StoreAccessError,
+} from "@/lib/store-access";
+import { requireAdmin } from "@/lib/admin-gate";
 
 export interface StoreActionResult {
   success: boolean;
@@ -58,9 +65,13 @@ export async function getManualStoreConfig(
     ? await db.store.findUnique({
         where: { storeDomain: normalizeStoreDomain(storeDomain) },
       })
-    : await db.store.findFirst({ orderBy: { createdAt: "desc" } });
+    : await db.store.findFirst({
+        where: { clerkUserId: userId },
+        orderBy: { createdAt: "desc" },
+      });
 
   if (!store) return null;
+  if (store.clerkUserId && store.clerkUserId !== userId) return null;
 
   return {
     storeDomain: store.storeDomain,
@@ -75,6 +86,7 @@ export async function getStoreDomainsForManualSetup(): Promise<string[]> {
   if (!userId) return [];
 
   const stores = await db.store.findMany({
+    where: { clerkUserId: userId },
     select: { storeDomain: true },
     orderBy: { createdAt: "desc" },
   });
@@ -159,10 +171,13 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
       );
     }
 
+    await ensureMerchantForUser(userId);
+
     await db.store.upsert({
       where: { storeDomain },
       create: {
         storeDomain,
+        clerkUserId: userId,
         alternateShopDomains,
         ...(shopName ? { name: shopName } : {}),
         apiKey: encryptToken(apiKey),
@@ -171,6 +186,7 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
         storefrontToken: encryptToken(storefrontToken),
       },
       update: {
+        clerkUserId: userId,
         alternateShopDomains,
         ...(shopName ? { name: shopName } : {}),
         apiKey: encryptToken(apiKey),
@@ -251,6 +267,7 @@ export async function updateStoreTtaiBindings(
   ttaiTrunkId: string
 ): Promise<StoreActionResult> {
   try {
+    await requireAdmin();
     await db.store.update({
       where: { storeDomain },
       data: {
@@ -276,6 +293,7 @@ export async function updateStoreNdrcTtaiBindings(
   ndrcTtaiTrunkId: string
 ): Promise<StoreActionResult> {
   try {
+    await requireAdmin();
     await db.store.update({
       where: { storeDomain },
       data: {
@@ -297,18 +315,10 @@ export async function updateStoreNdrcTtaiBindings(
 }
 
 export async function getStoresForDashboard() {
-  const stores = await db.store.findMany({
-    select: {
-      id: true,
-      storeDomain: true,
-      name: true,
-      ttaiScenarioId: true,
-      ttaiTrunkId: true,
-      createdAt: true,
-    },
-    orderBy: { createdAt: "desc" },
-  });
-  return stores;
+  const { userId } = await auth();
+  if (!userId) return [];
+
+  return getStoresForUser(userId);
 }
 
 type CheckoutWithLatestAttempt = Prisma.AbandonedCheckoutGetPayload<{
@@ -368,6 +378,15 @@ export async function fetchTtaiSessionDetailsForCallLog(checkoutId: string): Pro
 
   if (!checkout) {
     return { success: false, error: "Call log not found" };
+  }
+
+  try {
+    await assertStoreAccess(checkout.storeDomain);
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof StoreAccessError ? error.message : "Forbidden",
+    };
   }
 
   const attempt = checkout.callAttempts[0];
@@ -445,6 +464,12 @@ export async function fetchTtaiSessionDetailsForCallLog(checkoutId: string): Pro
 }
 
 export async function getCheckoutLogsForStore(storeDomain: string) {
+  try {
+    await assertStoreAccess(storeDomain);
+  } catch {
+    return [];
+  }
+
   const checkouts = await db.abandonedCheckout.findMany({
     where: {
       storeDomain,
