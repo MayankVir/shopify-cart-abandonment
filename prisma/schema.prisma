@@ -22,6 +22,8 @@ enum SheetSyncDirection {
 model Store {
   id               String              @id @default(uuid())
   storeDomain      String              @unique
+  /** Shopify shop display name (e.g. "Acme Store"), fetched from Admin API after connect. */
+  name             String?
   apiKey           String?
   apiSecret        String?
   adminAccessToken String
@@ -38,9 +40,18 @@ model Store {
   alternateShopDomains String[]        @default([])
   ttaiScenarioId   String?
   ttaiTrunkId      String?
+  /** Public Google Sheet / CSV export URL for NDRC (non-delivery confirmation) orders. */
+  ndrcSheetUrl         String             @default("") @db.Text
+  ndrcSheetSyncDirection SheetSyncDirection @default(BOTTOM)
+  /** Only sync sheet rows with attempts >= this value. */
+  ndrcMinAttempts      Int                @default(1)
+  lastNdrcSheetSyncAt  DateTime?
+  ndrcTtaiScenarioId   String?
+  ndrcTtaiTrunkId      String?
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
   checkouts        AbandonedCheckout[]
+  ndrcOrders       NdrcOrder[]
 }
 
 model AbandonedCheckout {
@@ -114,4 +125,56 @@ enum CallStatus {
   DRAFT_CREATE_FAILED
   ENRICH_FAILED
   DISPATCH_FAILED
+}
+
+/** NDRC = Non-Delivery Report Confirmation. Sheet-sourced orders with failed
+ * delivery attempt(s), called manually to confirm/redeliver/cancel. */
+model NdrcOrder {
+  id              String            @id @default(uuid())
+  /** Order id / name / AWB from the sheet — unique per store. */
+  orderId         String
+  customerPhone   String            @default("")
+  customerEmail   String?
+  orderValue      Float             @default(0)
+  /** Number of failed delivery attempts, from the sheet. */
+  attempts        Int               @default(0)
+  courierName     String            @default("")
+  awbNumber       String            @default("")
+  /** Raw sheet context (shipping address, etc.) — same shape as AbandonedCheckout.userContext. */
+  userContext     String            @default("") @db.Text
+  callStatus      CallStatus        @default(PENDING)
+  lastError       String?           @db.Text
+  sessionId       String?
+  storeDomain     String
+  store           Store             @relation(fields: [storeDomain], references: [storeDomain], onDelete: Cascade)
+  callAttempts    NdrcCallAttempt[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([storeDomain, orderId])
+  @@index([storeDomain])
+  @@index([callStatus])
+}
+
+model NdrcCallAttempt {
+  id              String     @id @default(uuid())
+  ndrcOrderId     String
+  order           NdrcOrder  @relation(fields: [ndrcOrderId], references: [id], onDelete: Cascade)
+  callId          String?
+  sessionId       String?
+  status          CallStatus @default(PREPARING)
+  failureStage    String?
+  failureReason   String?    @db.Text
+  transcript      String?    @db.Text
+  toolCallsJson   Json       @default("[]")
+  dynamicVarsJson Json       @default("{}")
+  trigger         String     @default("manual")
+  startedAt       DateTime   @default(now())
+  endedAt         DateTime?
+  durationSec     Int?
+
+  @@index([ndrcOrderId])
+  @@index([callId])
+  @@index([sessionId])
+  @@index([status])
 }

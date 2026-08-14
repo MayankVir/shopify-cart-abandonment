@@ -85,7 +85,7 @@ export interface ParsedSheetRow {
   } | null;
 }
 
-function parseCsv(text: string): string[][] {
+export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -426,7 +426,7 @@ export function parseSheetRow(record: Record<string, string>): ParsedSheetRow | 
   };
 }
 
-async function tryFetchCsv(url: string): Promise<{ ok: boolean; text: string; status: number }> {
+export async function tryFetchCsv(url: string): Promise<{ ok: boolean; text: string; status: number }> {
   try {
     const response = await fetch(url, {
       headers: { Accept: "text/csv,text/plain,*/*" },

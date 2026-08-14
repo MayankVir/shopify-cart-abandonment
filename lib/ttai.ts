@@ -21,13 +21,27 @@ export interface SipDynamicVars {
   payment_pending?: string;
   /** Sheet shipping address as one concatenated string. */
   address?: string;
+  [key: string]: string | undefined;
+}
+
+/** Dynamic vars for NDRC (non-delivery confirmation) calls — no cart/draft order involved. */
+export interface NdrcSipDynamicVars {
+  order_id: string;
+  phone_number: string;
+  customer_phone?: string;
+  order_value?: string;
+  attempts?: string;
+  courier?: string;
+  awb_number?: string;
+  address?: string;
+  [key: string]: string | undefined;
 }
 
 export interface DispatchSipCallParams {
   phone: string;
   scenarioId: string;
   sipTrunkId: string;
-  dynamicVars: SipDynamicVars;
+  dynamicVars: Record<string, string | undefined>;
 }
 
 export interface DispatchSipCallResult {
@@ -513,6 +527,36 @@ export function buildSipDynamicVars(input: {
   }
   if (input.draftOrderName) vars.draft_order_name = input.draftOrderName;
   if (input.draftOrderContext) vars.draft_order_context = input.draftOrderContext;
+
+  const address = formatShippingAddress(input.shippingAddress ?? null);
+  if (address) vars.address = address;
+
+  return vars;
+}
+
+export function buildNdrcSipDynamicVars(input: {
+  orderId: string;
+  phone: string;
+  orderValue?: number;
+  attempts?: number;
+  courierName?: string;
+  awbNumber?: string;
+  shippingAddress?: {
+    address?: string;
+    pincode?: string;
+    state?: string;
+    country?: string;
+  } | null;
+}): NdrcSipDynamicVars {
+  const vars: NdrcSipDynamicVars = {
+    order_id: input.orderId,
+    phone_number: input.phone,
+    customer_phone: input.phone,
+  };
+  if (input.orderValue != null) vars.order_value = String(input.orderValue);
+  if (input.attempts != null) vars.attempts = String(input.attempts);
+  if (input.courierName) vars.courier = input.courierName;
+  if (input.awbNumber) vars.awb_number = input.awbNumber;
 
   const address = formatShippingAddress(input.shippingAddress ?? null);
   if (address) vars.address = address;

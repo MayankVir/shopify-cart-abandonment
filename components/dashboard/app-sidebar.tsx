@@ -9,6 +9,7 @@ import {
   Settings,
   Shield,
   ShoppingCart,
+  Truck,
   type LucideIcon,
 } from "lucide-react";
 import { SidebarUser } from "@/components/dashboard/sidebar-user";
@@ -34,6 +35,7 @@ interface AppSidebarProps {
 const MAIN_NAV = [
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/dashboard/recovery", label: "Recovery", icon: ShoppingCart },
+  { href: "/dashboard/ndrc", label: "NDRC", icon: Truck },
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
 ] as const;
 

@@ -78,6 +78,14 @@ const SHOP_MYSHOPIFY_DOMAINS_QUERY = `
   }
 `;
 
+const SHOP_NAME_QUERY = `
+  query ShopName {
+    shop {
+      name
+    }
+  }
+`;
+
 const ABANDONED_CHECKOUTS_QUERY = `
   query AbandonedCheckouts($first: Int!, $after: String, $query: String) {
     abandonedCheckouts(
@@ -301,6 +309,20 @@ export async function fetchShopMyshopifyAliases(
   }
 
   return Array.from(hosts);
+}
+
+/** Merchant-facing shop display name (e.g. "Acme Store"), not the *.myshopify.com handle. */
+export async function fetchShopName(
+  storeDomain: string,
+  adminAccessToken: string
+): Promise<string | null> {
+  const data = await adminGraphql<{ shop: { name: string | null } }>(
+    storeDomain,
+    adminAccessToken,
+    SHOP_NAME_QUERY
+  );
+
+  return data.shop.name?.trim() || null;
 }
 
 export async function fetchShopifyAbandonedCheckouts(

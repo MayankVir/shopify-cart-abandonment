@@ -3,7 +3,10 @@
 import { useTransition } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
-import { updateStoreTtaiBindings } from "@/app/actions/store";
+import {
+  updateStoreNdrcTtaiBindings,
+  updateStoreTtaiBindings,
+} from "@/app/actions/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,6 +23,8 @@ interface AdminStoreRow {
   storeDomain: string;
   ttaiScenarioId: string | null;
   ttaiTrunkId: string | null;
+  ndrcTtaiScenarioId: string | null;
+  ndrcTtaiTrunkId: string | null;
   createdAt: Date;
   _count: { checkouts: number };
 }
@@ -30,6 +35,7 @@ interface AdminStoresTableProps {
 
 export function AdminStoresTable({ stores }: AdminStoresTableProps) {
   const [isPending, startTransition] = useTransition();
+  const [isNdrcPending, startNdrcTransition] = useTransition();
 
   function handleUpdate(storeDomain: string, form: HTMLFormElement) {
     const formData = new FormData(form);
@@ -52,6 +58,27 @@ export function AdminStoresTable({ stores }: AdminStoresTableProps) {
     });
   }
 
+  function handleUpdateNdrc(storeDomain: string, form: HTMLFormElement) {
+    const formData = new FormData(form);
+    const ndrcTtaiScenarioId = String(formData.get("ndrcTtaiScenarioId") ?? "");
+    const ndrcTtaiTrunkId = String(formData.get("ndrcTtaiTrunkId") ?? "");
+
+    startNdrcTransition(async () => {
+      const result = await updateStoreNdrcTtaiBindings(
+        storeDomain,
+        ndrcTtaiScenarioId,
+        ndrcTtaiTrunkId,
+      );
+
+      if (!result.success) {
+        toast.error(result.error ?? "Update failed");
+        return;
+      }
+
+      toast.success(`Updated NDRC TTAI bindings for ${storeDomain}`);
+    });
+  }
+
   if (stores.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-border py-16 text-center text-muted-foreground">
@@ -67,9 +94,10 @@ export function AdminStoresTable({ stores }: AdminStoresTableProps) {
           <TableRow>
             <TableHead>Store Domain</TableHead>
             <TableHead>Checkouts</TableHead>
-            <TableHead>TTAI Scenario ID</TableHead>
-            <TableHead>TTAI Trunk ID</TableHead>
-            <TableHead className="w-[120px]">Actions</TableHead>
+            <TableHead>Recovery TTAI Scenario / Trunk</TableHead>
+            <TableHead className="w-[90px]" />
+            <TableHead>NDRC TTAI Scenario / Trunk</TableHead>
+            <TableHead className="w-[90px]" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -77,7 +105,7 @@ export function AdminStoresTable({ stores }: AdminStoresTableProps) {
             <TableRow key={store.id}>
               <TableCell className="font-medium">{store.storeDomain}</TableCell>
               <TableCell>{store._count.checkouts}</TableCell>
-              <TableCell colSpan={2}>
+              <TableCell>
                 <form
                   id={`form-${store.id}`}
                   className="grid gap-2 sm:grid-cols-2"
@@ -106,6 +134,41 @@ export function AdminStoresTable({ stores }: AdminStoresTableProps) {
                   disabled={isPending}
                 >
                   {isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    "Save"
+                  )}
+                </Button>
+              </TableCell>
+              <TableCell>
+                <form
+                  id={`ndrc-form-${store.id}`}
+                  className="grid gap-2 sm:grid-cols-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleUpdateNdrc(store.storeDomain, e.currentTarget);
+                  }}
+                >
+                  <Input
+                    name="ndrcTtaiScenarioId"
+                    defaultValue={store.ndrcTtaiScenarioId ?? ""}
+                    placeholder="Scenario ID"
+                  />
+                  <Input
+                    name="ndrcTtaiTrunkId"
+                    defaultValue={store.ndrcTtaiTrunkId ?? ""}
+                    placeholder="Trunk ID"
+                  />
+                </form>
+              </TableCell>
+              <TableCell>
+                <Button
+                  type="submit"
+                  form={`ndrc-form-${store.id}`}
+                  size="sm"
+                  disabled={isNdrcPending}
+                >
+                  {isNdrcPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     "Save"

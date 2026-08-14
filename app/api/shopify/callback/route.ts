@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptToken } from "@/lib/encryption";
+import { fetchShopName } from "@/lib/shopify-admin";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
@@ -61,5 +62,23 @@ export async function GET(request: NextRequest) {
     },
   });
 
-  return NextResponse.redirect(`${appUrl}/dashboard/onboarding?connected=1`);
+  // Best-effort: fetch the merchant-facing shop name so the dashboard can show
+  // something friendlier than the raw domain. Never block the redirect on this.
+  try {
+    const shopName = await fetchShopName(storeDomain, tokenData.access_token);
+    if (shopName) {
+      await db.store.update({ where: { storeDomain }, data: { name: shopName } });
+    }
+  } catch (nameError) {
+    console.warn(
+      "Could not fetch shop name after OAuth connect:",
+      nameError instanceof Error ? nameError.message : nameError
+    );
+  }
+
+  const redirectUrl = new URL(`${appUrl}/dashboard/onboarding`);
+  redirectUrl.searchParams.set("connected", "1");
+  redirectUrl.searchParams.set("shop", storeDomain);
+
+  return NextResponse.redirect(redirectUrl);
 }

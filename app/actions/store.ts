@@ -17,6 +17,7 @@ import {
 } from "@/lib/store-domain";
 import {
   fetchShopMyshopifyAliases,
+  fetchShopName,
   verifyStoreAdminAccess,
 } from "@/lib/shopify-admin";
 import {
@@ -148,11 +149,22 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
       );
     }
 
+    let shopName: string | null = null;
+    try {
+      shopName = await fetchShopName(storeDomain, adminTokenForApi);
+    } catch (nameError) {
+      console.warn(
+        "Could not auto-fetch shop name:",
+        nameError instanceof Error ? nameError.message : nameError
+      );
+    }
+
     await db.store.upsert({
       where: { storeDomain },
       create: {
         storeDomain,
         alternateShopDomains,
+        ...(shopName ? { name: shopName } : {}),
         apiKey: encryptToken(apiKey),
         apiSecret: encryptToken(apiSecret),
         adminAccessToken: encryptToken(""),
@@ -160,6 +172,7 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
       },
       update: {
         alternateShopDomains,
+        ...(shopName ? { name: shopName } : {}),
         apiKey: encryptToken(apiKey),
         apiSecret: encryptToken(apiSecret),
         adminAccessToken: encryptToken(""),
@@ -257,11 +270,38 @@ export async function updateStoreTtaiBindings(
   }
 }
 
+export async function updateStoreNdrcTtaiBindings(
+  storeDomain: string,
+  ndrcTtaiScenarioId: string,
+  ndrcTtaiTrunkId: string
+): Promise<StoreActionResult> {
+  try {
+    await db.store.update({
+      where: { storeDomain },
+      data: {
+        ndrcTtaiScenarioId: ndrcTtaiScenarioId.trim() || null,
+        ndrcTtaiTrunkId: ndrcTtaiTrunkId.trim() || null,
+      },
+    });
+
+    revalidatePath("/admin");
+    revalidatePath("/dashboard/admin");
+
+    return { success: true, storeDomain };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Update failed",
+    };
+  }
+}
+
 export async function getStoresForDashboard() {
   const stores = await db.store.findMany({
     select: {
       id: true,
       storeDomain: true,
+      name: true,
       ttaiScenarioId: true,
       ttaiTrunkId: true,
       createdAt: true,
