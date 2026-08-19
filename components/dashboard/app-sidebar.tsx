@@ -83,7 +83,7 @@ export function AppSidebar({ showAdminLink = false, account }: AppSidebarProps) 
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
-              <Link href="/dashboard/analytics">
+              <Link href="/dashboard/recovery">
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
                   <Phone className="size-4" />
                 </div>

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { PhoneCall } from 'lucide-react';
 import { auth } from '@clerk/nextjs/server';
+import { DashboardEntryButton } from '@/components/landing/dashboard-entry-button';
 
 export async function Navbar() {
   const { userId } = await auth();
@@ -22,9 +23,7 @@ export async function Navbar() {
 
         <div className="flex items-center space-x-4">
           {userId ? (
-            <Link href="/dashboard" className="inline-flex h-9 items-center justify-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow transition-colors hover:bg-indigo-700">
-              Go to Dashboard
-            </Link>
+            <DashboardEntryButton />
           ) : (
             <Link href="/sign-in" className="inline-flex h-9 items-center justify-center rounded-md bg-white px-4 py-2 text-sm font-medium text-black shadow transition-colors hover:bg-gray-200">
               Get Started
