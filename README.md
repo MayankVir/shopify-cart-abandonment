@@ -41,7 +41,7 @@ UAGENTS_TOKEN=       # was UAGENTS_TOKEN
 UAGENTS_BASE_URL=https://uagents.val.run
 
 TTAI_WEBHOOK_SECRET= # verify POST /api/webhooks/ttai
-CRON_SECRET=         # optional Bearer for /api/cron/process-calls
+CRON_SECRET=         # required Bearer for /api/cron/process-calls
 ```
 
 Per-store **SIP scenario + trunk** are set in `/admin` (`ttaiScenarioId`, `ttaiTrunkId`).
@@ -55,12 +55,14 @@ Per-store **SIP scenario + trunk** are set in `/admin` (`ttaiScenarioId`, `ttaiT
 
 ### Cron (required for auto-call with the tab closed)
 
-Vercel Cron hits `GET /api/cron/process-calls` every 5 minutes when `CRON_SECRET` is set. For other hosts, schedule the same request:
+Vercel Hobby only runs one cron per day, so this app does **not** use `vercel.json` crons. Something else must hit:
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" \
   https://your-app.com/api/cron/process-calls
 ```
+
+Set the same `CRON_SECRET` on Vercel (Production) and on cron-job.org as the `Authorization: Bearer <CRON_SECRET>` header.
 
 The job syncs auto-enabled stores, then dispatches at most `sipConcurrency` live calls per store (default 1).
 
