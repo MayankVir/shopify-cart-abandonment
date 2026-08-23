@@ -11,7 +11,7 @@ import {
   verifyShopifyWebhookHmac,
 } from "@/lib/shopify";
 import { mapWebhookLineItems } from "@/lib/line-items";
-import { isActiveCall } from "@/lib/call-status";
+import { isActiveCall, nextCallScheduledFlag } from "@/lib/call-status";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
 import {
   findStoreForWebhook,
@@ -241,6 +241,11 @@ export async function POST(request: NextRequest) {
         userContext: userContext || existing.userContext,
         shopifyCreatedAt: existing.shopifyCreatedAt ?? shopifyCreatedAt,
         scheduledCallAt,
+        callScheduled: nextCallScheduledFlag(
+          store.autoCallsEnabled,
+          incomingPhone || existing.customerPhone,
+          existing
+        ),
       },
     });
 
@@ -287,7 +292,10 @@ export async function POST(request: NextRequest) {
       userContext,
       shopifyCreatedAt,
       scheduledCallAt,
-      callScheduled: Boolean(incomingPhone),
+      callScheduled: nextCallScheduledFlag(
+        store.autoCallsEnabled,
+        incomingPhone
+      ),
       callStatus: CallStatus.PENDING,
       storeDomain: store.storeDomain,
     },

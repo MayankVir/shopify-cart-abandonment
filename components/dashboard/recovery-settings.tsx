@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -48,6 +49,7 @@ export function RecoverySettings({
 }: RecoverySettingsProps) {
   const [callDelayMinutes, setCallDelayMinutes] = useState(30);
   const [sipConcurrency, setSipConcurrency] = useState(1);
+  const [autoCallsEnabled, setAutoCallsEnabled] = useState(false);
   const [checkoutSyncMode, setCheckoutSyncMode] =
     useState<CheckoutSyncModeValue>(CHECKOUT_SYNC_MODES.POLLING);
   const [sheetUrl, setSheetUrl] = useState("");
@@ -78,6 +80,7 @@ export function RecoverySettings({
 
       setCallDelayMinutes(settings.callDelayMinutes);
       setSipConcurrency(settings.sipConcurrency);
+      setAutoCallsEnabled(settings.autoCallsEnabled);
       setSheetUrl(settings.sheetUrl ?? "");
       setSheetSyncDirection(
         settings.sheetSyncDirection === "TOP"
@@ -116,7 +119,8 @@ export function RecoverySettings({
       const recovery = await updateStoreRecoverySettings(
         storeDomain,
         callDelayMinutes,
-        sipConcurrency
+        sipConcurrency,
+        autoCallsEnabled
       );
       if (!recovery.success) {
         toast.error(recovery.error ?? "Failed to save recovery settings");
@@ -144,8 +148,8 @@ export function RecoverySettings({
         <DialogHeader>
           <DialogTitle>Checkout recovery settings</DialogTitle>
           <DialogDescription>
-            Configure how abandoned checkouts are synced and when calls are
-            dispatched.
+            Configure how abandoned checkouts are synced and when auto-calls are
+            dispatched. Auto-call keeps running after you close this tab.
           </DialogDescription>
         </DialogHeader>
 
@@ -225,9 +229,24 @@ export function RecoverySettings({
               </>
             )}
 
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-3">
+              <div className="space-y-1">
+                <Label htmlFor="auto-calls">Automated calling</Label>
+                <p className="text-xs text-muted-foreground">
+                  Sync and dial due rows every 5 minutes, even if the dashboard
+                  is closed.
+                </p>
+              </div>
+              <Switch
+                id="auto-calls"
+                checked={autoCallsEnabled}
+                onCheckedChange={setAutoCallsEnabled}
+              />
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="call-delay">Auto-call delay (minutes)</Label>
+                <Label htmlFor="call-delay">Delay after cart entry (minutes)</Label>
                 <Input
                   id="call-delay"
                   type="number"
@@ -236,6 +255,9 @@ export function RecoverySettings({
                   value={callDelayMinutes}
                   onChange={(e) => setCallDelayMinutes(Number(e.target.value))}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Counted from the time on the sheet or Shopify row. Default 30.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="sip-concurrency">SIP concurrency</Label>
@@ -247,6 +269,9 @@ export function RecoverySettings({
                   value={sipConcurrency}
                   onChange={(e) => setSipConcurrency(Number(e.target.value))}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Starts at 1. Only that many live calls at once.
+                </p>
               </div>
             </div>
 

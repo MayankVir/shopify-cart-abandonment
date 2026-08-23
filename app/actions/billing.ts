@@ -9,22 +9,42 @@ import {
   minutesForAmountUsd,
   reconcilePendingTopUps,
 } from "@/lib/billing";
+import { db } from "@/lib/db";
 import { getBillingConfig } from "@/lib/billing-config";
 import { isDodoConfigured, getDodoTopUpProductId } from "@/lib/dodo-env";
+
+export async function getMerchantBillingSummary() {
+  const { userId } = await auth();
+  if (!userId) return null;
+
+  const [creditBalanceMinutes, config, merchant] = await Promise.all([
+    getMerchantCreditBalanceMinutes(userId),
+    getBillingConfig(),
+    db.merchant.findUnique({
+      where: { clerkUserId: userId },
+      select: { freeMinutesGranted: true },
+    }),
+  ]);
+
+  return {
+    creditBalanceMinutes,
+    ratePerMinuteUsd: config.ratePerMinuteUsd,
+    currency: config.currency,
+    freeMinutesGranted: merchant?.freeMinutesGranted ?? false,
+    paymentsEnabled: isDodoConfigured() && Boolean(getDodoTopUpProductId()),
+  };
+}
 
 export async function getMerchantBillingOverview() {
   const { userId } = await auth();
   if (!userId) return null;
 
-  const [status, config] = await Promise.all([
+  const [status, config, creditBalanceMinutes, recentTopUps] = await Promise.all([
     bootstrapMerchantBilling(),
     getBillingConfig(),
+    getMerchantCreditBalanceMinutes(userId),
+    listRecentTopUps(userId),
   ]);
-
-  await reconcilePendingTopUps(userId);
-
-  const creditBalanceMinutes = await getMerchantCreditBalanceMinutes(userId);
-  const recentTopUps = await listRecentTopUps(userId);
 
   return {
     clerkUserId: status.clerkUserId,

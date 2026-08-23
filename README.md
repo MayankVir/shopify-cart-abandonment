@@ -16,7 +16,7 @@ On **Call now** or **auto-scheduled call**:
 |---|---|
 | **Poll** (every 5 min) | Lists open `abandonedCheckouts` from Shopify Admin GraphQL — no cart creation |
 | **Webhook** `/api/webhooks/checkout-update` | Fast phone/email/line-item updates (optional accelerator) |
-| **Auto-call** | Runs on each sync + `/api/cron/process-calls` for due checkouts |
+| **Auto-call** | Store switch. Cron every 5 min syncs then dials due rows (works with the tab closed). Concurrency starts at 1. |
 
 ## Setup
 
@@ -53,12 +53,16 @@ Per-store **SIP scenario + trunk** are set in `/admin` (`ttaiScenarioId`, `ttaiT
 | `POST /api/webhooks/checkout-update` | Shopify checkout update (HMAC via store apiSecret) |
 | `POST /api/webhooks/ttai` | TTAI call completion → transcript, tool calls, status |
 
-### Cron (optional external scheduler)
+### Cron (required for auto-call with the tab closed)
+
+Vercel Cron hits `GET /api/cron/process-calls` every 5 minutes when `CRON_SECRET` is set. For other hosts, schedule the same request:
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" \
   https://your-app.com/api/cron/process-calls
 ```
+
+The job syncs auto-enabled stores, then dispatches at most `sipConcurrency` live calls per store (default 1).
 
 ## Call status analytics
 

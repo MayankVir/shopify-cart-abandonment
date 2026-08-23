@@ -29,6 +29,8 @@ yarn-error.log*
 .env*.local
 .env
 .env.prod
+google-service-account.json
+google-service-account.json.local
 
 # vercel
 .vercel

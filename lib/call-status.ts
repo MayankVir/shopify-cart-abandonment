@@ -69,3 +69,21 @@ export function canInitiateCall(status: CallStatus): boolean {
 export function canStopCall(status: CallStatus, callScheduled: boolean): boolean {
   return isActiveCall(status) || (status === CallStatus.PENDING && callScheduled);
 }
+
+export function shouldScheduleAutoCall(
+  autoCallsEnabled: boolean,
+  phone: string | null | undefined
+): boolean {
+  return autoCallsEnabled && Boolean(phone?.trim());
+}
+
+export function nextCallScheduledFlag(
+  autoCallsEnabled: boolean,
+  phone: string | null | undefined,
+  existing?: { callScheduled: boolean; callStatus: CallStatus } | null
+): boolean {
+  if (existing && existing.callStatus !== CallStatus.PENDING) {
+    return existing.callScheduled;
+  }
+  return shouldScheduleAutoCall(autoCallsEnabled, phone);
+}

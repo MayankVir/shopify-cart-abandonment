@@ -453,7 +453,7 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
   errors: number;
 }> {
   const store = await db.store.findUnique({ where: { storeDomain } });
-  if (!store) return { processed: 0, errors: 0 };
+  if (!store?.autoCallsEnabled) return { processed: 0, errors: 0 };
 
   const inFlight = await db.abandonedCheckout.count({
     where: {
@@ -462,7 +462,8 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
     },
   });
 
-  const slots = Math.max(0, store.sipConcurrency - inFlight);
+  const concurrency = Math.min(10, Math.max(1, store.sipConcurrency));
+  const slots = Math.max(0, concurrency - inFlight);
   if (slots === 0) return { processed: 0, errors: 0 };
 
   const due = await db.abandonedCheckout.findMany({

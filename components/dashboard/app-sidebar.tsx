@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   CreditCard,
+  FileSpreadsheet,
   Phone,
   Settings,
   Shield,
@@ -12,6 +13,7 @@ import {
   Truck,
   type LucideIcon,
 } from "lucide-react";
+import { isNavItemActive, useNavPending } from "@/components/dashboard/nav-pending";
 import { SidebarUser, type SidebarAccountSummary } from "@/components/dashboard/sidebar-user";
 import {
   Sidebar,
@@ -44,27 +46,82 @@ const SETUP_NAV = [
   { href: "/dashboard/onboarding", label: "Connect Store", icon: Settings },
 ] as const;
 
+function usePendingNavClick(href: string) {
+  const pathname = usePathname();
+  const { pendingHref, setPendingHref } = useNavPending();
+
+  return {
+    isActive: isNavItemActive(pathname, pendingHref, href),
+    onClick: (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey ||
+        event.button !== 0
+      ) {
+        return;
+      }
+      if (pathname !== href) setPendingHref(href);
+    },
+  };
+}
+
+function SidebarBrandLink() {
+  const { onClick } = usePendingNavClick("/dashboard/recovery");
+
+  return (
+    <SidebarMenuButton size="lg" asChild tooltip="Recovery">
+      <Link href="/dashboard/recovery" prefetch onClick={onClick}>
+        <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+          <Phone className="size-4" />
+        </div>
+        <div className="grid flex-1 text-left text-sm leading-tight">
+          <span className="truncate font-semibold">Cart Recovery IVR</span>
+          <span className="truncate text-xs text-sidebar-foreground/60">
+            Voice platform
+          </span>
+        </div>
+      </Link>
+    </SidebarMenuButton>
+  );
+}
+
+function SidebarNavLink({
+  href,
+  label,
+  icon: Icon,
+}: {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+}) {
+  const { isActive, onClick } = usePendingNavClick(href);
+
+  return (
+    <SidebarMenuButton asChild isActive={isActive} tooltip={label}>
+      <Link href={href} prefetch onClick={onClick}>
+        <Icon />
+        <span>{label}</span>
+      </Link>
+    </SidebarMenuButton>
+  );
+}
+
 function NavItems({
   items,
-  isActive,
 }: {
   items: ReadonlyArray<{
     href: string;
     label: string;
     icon: LucideIcon;
   }>;
-  isActive: (href: string) => boolean;
 }) {
   return (
     <SidebarMenu>
-      {items.map(({ href, label, icon: Icon }) => (
+      {items.map(({ href, label, icon }) => (
         <SidebarMenuItem key={href}>
-          <SidebarMenuButton asChild isActive={isActive(href)} tooltip={label}>
-            <Link href={href}>
-              <Icon />
-              <span>{label}</span>
-            </Link>
-          </SidebarMenuButton>
+          <SidebarNavLink href={href} label={label} icon={icon} />
         </SidebarMenuItem>
       ))}
     </SidebarMenu>
@@ -72,29 +129,12 @@ function NavItems({
 }
 
 export function AppSidebar({ showAdminLink = false, account }: AppSidebarProps) {
-  const pathname = usePathname();
-
-  const isActive = (href: string) =>
-    pathname === href || pathname.startsWith(`${href}/`);
-
   return (
     <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
-              <Link href="/dashboard/recovery">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                  <Phone className="size-4" />
-                </div>
-                <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">Cart Recovery IVR</span>
-                  <span className="truncate text-xs text-sidebar-foreground/60">
-                    Voice platform
-                  </span>
-                </div>
-              </Link>
-            </SidebarMenuButton>
+            <SidebarBrandLink />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
@@ -103,14 +143,14 @@ export function AppSidebar({ showAdminLink = false, account }: AppSidebarProps) 
         <SidebarGroup>
           <SidebarGroupLabel>Platform</SidebarGroupLabel>
           <SidebarGroupContent>
-            <NavItems items={MAIN_NAV} isActive={isActive} />
+            <NavItems items={MAIN_NAV} />
           </SidebarGroupContent>
         </SidebarGroup>
 
         <SidebarGroup>
           <SidebarGroupLabel>Setup</SidebarGroupLabel>
           <SidebarGroupContent>
-            <NavItems items={SETUP_NAV} isActive={isActive} />
+            <NavItems items={SETUP_NAV} />
           </SidebarGroupContent>
         </SidebarGroup>
 
@@ -120,16 +160,18 @@ export function AppSidebar({ showAdminLink = false, account }: AppSidebarProps) 
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={isActive("/dashboard/admin")}
-                    tooltip="Admin"
-                  >
-                    <Link href="/dashboard/admin">
-                      <Shield />
-                      <span>Admin</span>
-                    </Link>
-                  </SidebarMenuButton>
+                  <SidebarNavLink
+                    href="/dashboard/admin"
+                    label="Admin"
+                    icon={Shield}
+                  />
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarNavLink
+                    href="/dashboard/drafts"
+                    label="Drafts"
+                    icon={FileSpreadsheet}
+                  />
                 </SidebarMenuItem>
               </SidebarMenu>
             </SidebarGroupContent>

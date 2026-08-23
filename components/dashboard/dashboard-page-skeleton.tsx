@@ -86,6 +86,39 @@ export function RecoveryTableSkeleton() {
   );
 }
 
+export function DraftsPageSkeleton() {
+  return (
+    <div className="space-y-8">
+      <PageHeaderSkeleton
+        titleClassName="h-9 w-28"
+        descriptionClassName="mt-2 h-4 w-[28rem]"
+      />
+      <div className="space-y-3 rounded-xl border border-border bg-card p-5">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span className="inline-block size-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground" />
+          Loading drafts…
+        </div>
+        <Skeleton className="h-4 w-36" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-9 w-32" />
+      </div>
+    </div>
+  );
+}
+
+export function AdminPageSkeleton() {
+  return (
+    <div className="space-y-8">
+      <PageHeaderSkeleton
+        titleClassName="h-9 w-44"
+        descriptionClassName="mt-2 h-4 w-[24rem]"
+      />
+      <Skeleton className="h-10 w-80" />
+      <TableCardSkeleton rows={5} />
+    </div>
+  );
+}
+
 export function OnboardingFormSkeleton() {
   return (
     <div className="space-y-6">

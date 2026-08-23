@@ -96,6 +96,8 @@ model Store {
   storefrontToken  String
   callDelayMinutes Int                 @default(30)
   sipConcurrency   Int                 @default(1)
+  /** When true, cron syncs and auto-dials due recovery rows even if the dashboard is closed. */
+  autoCallsEnabled Boolean             @default(false)
   checkoutSyncMode CheckoutSyncMode    @default(POLLING)
   /** Public Google Sheet / CSV export URL for plugin abandoned-checkout rows. */
   sheetUrl         String              @default("") @db.Text

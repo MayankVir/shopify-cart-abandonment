@@ -4,10 +4,12 @@ import { db } from "@/lib/db";
 import {
   type LineItemRecord,
   lineItemsChanged,
+  lineItemsHaveVariantId,
   mapWebhookLineItems,
   variantGidFromWebhook,
 } from "@/lib/line-items";
 import { normalizePhoneNumber } from "@/lib/phone";
+import { nextCallScheduledFlag } from "@/lib/call-status";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
 import { parseSheetUrl, sheetGvizRangeUrl } from "@/lib/sheet-url";
 import {
@@ -286,7 +288,7 @@ export async function fetchSheetCsvPage(
   );
 }
 
-function rowToRecord(headers: string[], values: string[]): Record<string, string> {
+export function rowToRecord(headers: string[], values: string[]): Record<string, string> {
   const record: Record<string, string> = {};
   for (let i = 0; i < headers.length; i++) {
     record[headers[i]] = values[i]?.trim() ?? "";
@@ -317,61 +319,211 @@ function variantIdFromUrl(url: string | undefined): string {
   return match?.[1] ?? "";
 }
 
-function parseLineItemsFromSheet(record: Record<string, string>): LineItemRecord[] {
-  const flatVariantIds = (record.variant_ids || "")
-    .split(/[,;]/)
-    .map((s) => s.trim())
+function extractVariantIdToken(token: string): string {
+  const trimmed = token
+    .trim()
+    .replace(/^['"`\[\]]+|['"`\[\]]+$/g, "")
+    .trim();
+  if (!trimmed) return "";
+  const gid = trimmed.match(/gid:\/\/shopify\/ProductVariant\/(\d+)/i);
+  if (gid) return gid[1];
+  const fromUrl = variantIdFromUrl(trimmed);
+  if (fromUrl) return fromUrl;
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  return "";
+}
+
+/** Parse `123,456`, `[123, 456]`, `["123","456"]`, or GIDs into numeric variant IDs. */
+export function parseVariantIdList(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  let text = raw.trim();
+  if (text.startsWith("'")) text = text.slice(1).trim();
+
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) {
+      const fromJson = parsed
+        .flatMap((item) => {
+          if (typeof item === "number" || typeof item === "string") {
+            return [extractVariantIdToken(String(item))];
+          }
+          if (item && typeof item === "object") {
+            const obj = item as Record<string, unknown>;
+            const candidate =
+              obj.variant_id ??
+              obj.variantId ??
+              obj.merchandiseId ??
+              obj.admin_graphql_api_id ??
+              obj.variant_gid;
+            return [extractVariantIdToken(String(candidate ?? ""))];
+          }
+          return [];
+        })
+        .filter(Boolean);
+      if (fromJson.length) return fromJson;
+    }
+  } catch {
+    // not JSON — keep splitting
+  }
+
+  const ids = text
+    .split(/[,;|]/)
+    .map(extractVariantIdToken)
     .filter(Boolean);
+  if (ids.length) return ids;
 
-  const jsonRaw = record.items_full_json?.trim();
-  if (jsonRaw) {
-    try {
-      const items = JSON.parse(jsonRaw) as Array<{
-        id?: number | string;
-        variant_id?: number | string;
-        product_id?: number | string;
-        title?: string;
-        quantity?: number;
-        price?: number;
-        final_price?: number;
-        sku?: string;
-        url?: string;
-      }>;
-      if (Array.isArray(items) && items.length > 0) {
-        return mapWebhookLineItems(
-          items.map((item, index) => {
-            let variantId =
-              typeof item.variant_id === "number"
-                ? item.variant_id
-                : parseInt(String(item.variant_id ?? ""), 10) || undefined;
+  // Don't scrape digits out of draft-order JSON / notes.
+  if (text.startsWith("{") || /draftorder/i.test(text)) return [];
 
-            if (!variantId) {
-              variantId =
-                parseInt(variantIdFromUrl(item.url), 10) ||
-                parseInt(flatVariantIds[index] ?? flatVariantIds[0] ?? "", 10) ||
-                undefined;
-            }
+  const fallback: string[] = [];
+  const digitRe = /\d{8,}/g;
+  let match: RegExpExecArray | null = digitRe.exec(text);
+  while (match) {
+    fallback.push(match[0]);
+    match = digitRe.exec(text);
+  }
+  return fallback;
+}
 
-            return {
-              variant_id: variantId,
-              product_id:
-                typeof item.product_id === "number"
-                  ? item.product_id
-                  : parseInt(String(item.product_id ?? ""), 10) || undefined,
-              title: item.title,
-              quantity: item.quantity ?? 1,
-              price:
-                item.price != null
-                  ? String(Number(item.price) / 100)
-                  : item.final_price != null
-                    ? String(Number(item.final_price) / 100)
-                    : undefined,
-            };
-          })
-        );
+function looksLikeDraftContext(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  const note = String(obj.note ?? "");
+  return (
+    /draftorder/i.test(note) ||
+    (typeof obj.status === "string" &&
+      !("line_items" in obj) &&
+      !("items" in obj) &&
+      !("variant_id" in obj) &&
+      !("variantId" in obj))
+  );
+}
+
+function collectVariantIdsFromRecord(record: Record<string, string>): string[] {
+  const named = parseVariantIdList(
+    record.variant_ids || record.variant_id || ""
+  );
+  if (named.length) return named;
+
+  for (const [key, value] of Object.entries(record)) {
+    if (!/variant/.test(key) || key.includes("json")) continue;
+    const ids = parseVariantIdList(value);
+    if (ids.length > 0) return ids;
+  }
+  return [];
+}
+
+function variantIdFromItem(item: Record<string, unknown>): string {
+  const candidate =
+    item.variant_id ??
+    item.variantId ??
+    item.merchandiseId ??
+    item.admin_graphql_api_id ??
+    item.variant_gid ??
+    item.url;
+  return extractVariantIdToken(String(candidate ?? ""));
+}
+
+function coerceItemsFullJson(raw: string): unknown {
+  let text = raw.trim();
+  if (text.startsWith("'")) text = text.slice(1).trim();
+  try {
+    let parsed: unknown = JSON.parse(text);
+    if (typeof parsed === "string") {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return parsed;
       }
-    } catch {
-      // fall through to flat columns
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function parseLineItemsFromSheet(record: Record<string, string>): LineItemRecord[] {
+  const flatVariantIds = collectVariantIdsFromRecord(record);
+  const jsonRaw = record.items_full_json?.trim();
+
+  if (jsonRaw) {
+    const parsed = coerceItemsFullJson(jsonRaw);
+    if (!looksLikeDraftContext(parsed)) {
+      const items = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === "object"
+          ? ((parsed as { line_items?: unknown; items?: unknown }).line_items ??
+            (parsed as { line_items?: unknown; items?: unknown }).items)
+          : null;
+
+      if (Array.isArray(items) && items.length > 0) {
+        const allIds = items.every(
+          (item) => typeof item === "number" || typeof item === "string"
+        );
+        if (allIds) {
+          const ids = items
+            .map((item) => extractVariantIdToken(String(item)))
+            .filter(Boolean);
+          if (ids.length) {
+            return ids.map((variantId) => ({
+              variant_id: variantId,
+              variant_gid: variantGidFromWebhook(variantId),
+              title: "",
+              quantity: 1,
+              price: "",
+            }));
+          }
+        } else {
+          const mapped = mapWebhookLineItems(
+            items.map((item, index) => {
+              const obj = (item && typeof item === "object" ? item : {}) as Record<
+                string,
+                unknown
+              >;
+              const variantId =
+                variantIdFromItem(obj) ||
+                flatVariantIds[index] ||
+                flatVariantIds[0] ||
+                "";
+              const productId = obj.product_id ?? obj.productId;
+              const price = obj.price ?? obj.final_price;
+              return {
+                variant_id: variantId ? Number(variantId) || undefined : undefined,
+                variantId: variantId ? Number(variantId) || undefined : undefined,
+                product_id:
+                  typeof productId === "number"
+                    ? productId
+                    : parseInt(String(productId ?? ""), 10) || undefined,
+                title: typeof obj.title === "string" ? obj.title : undefined,
+                quantity:
+                  typeof obj.quantity === "number"
+                    ? obj.quantity
+                    : parseInt(String(obj.quantity ?? "1"), 10) || 1,
+                price:
+                  price != null
+                    ? String(
+                        Number(price) > 1000 ? Number(price) / 100 : Number(price)
+                      )
+                    : undefined,
+              };
+            })
+          );
+          if (lineItemsHaveVariantId(mapped)) {
+            return mapped;
+          }
+        }
+      }
+
+      const idsFromJson = parseVariantIdList(jsonRaw);
+      if (idsFromJson.length) {
+        return idsFromJson.map((variantId) => ({
+          variant_id: variantId,
+          variant_gid: variantGidFromWebhook(variantId),
+          title: "",
+          quantity: 1,
+          price: "",
+        }));
+      }
     }
   }
 
@@ -502,7 +654,11 @@ export interface SheetSyncResult {
 export async function syncAbandonedCheckoutsFromSheet(
   store: Pick<
     Store,
-    "storeDomain" | "sheetUrl" | "callDelayMinutes" | "sheetSyncDirection"
+    | "storeDomain"
+    | "sheetUrl"
+    | "callDelayMinutes"
+    | "sheetSyncDirection"
+    | "autoCallsEnabled"
   >,
   options: { page?: number; pageSize?: number } = {}
 ): Promise<SheetSyncResult> {
@@ -588,9 +744,11 @@ export async function syncAbandonedCheckoutsFromSheet(
           userContext,
           shopifyCreatedAt: abandonedAt ?? existing.shopifyCreatedAt,
           scheduledCallAt,
-          // Keep existing callScheduled for rows already dialing / scheduled.
-          // Only force false when we had no active schedule marker before.
-          callScheduled: existing.callScheduled,
+          callScheduled: nextCallScheduledFlag(
+            store.autoCallsEnabled,
+            row.customerPhone || existing.customerPhone,
+            existing
+          ),
           storeDomain: store.storeDomain,
           ...(shouldClearDraft
             ? { draftOrderId: "", draftOrderName: "" }
@@ -609,7 +767,10 @@ export async function syncAbandonedCheckoutsFromSheet(
           userContext,
           shopifyCreatedAt: abandonedAt,
           scheduledCallAt,
-          callScheduled: false,
+          callScheduled: nextCallScheduledFlag(
+            store.autoCallsEnabled,
+            row.customerPhone
+          ),
           callStatus: CallStatus.PENDING,
           storeDomain: store.storeDomain,
         },

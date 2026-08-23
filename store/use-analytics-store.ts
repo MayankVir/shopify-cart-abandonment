@@ -45,7 +45,11 @@ interface AnalyticsState {
   setMetrics: (metrics: Partial<AnalyticsMetrics>) => void;
   setCallLogs: (logs: CallLogEntry[]) => void;
   addCallLog: (log: CallLogEntry) => void;
-  updateCallStatus: (id: string, status: CallStatus, aiSummary?: string) => void;
+  updateCallStatus: (
+    id: string,
+    status: CallStatus,
+    aiSummary?: string,
+  ) => void;
   getFilteredCallLogs: () => CallLogEntry[];
   getFilteredMetrics: () => AnalyticsMetrics;
   reset: () => void;
@@ -72,12 +76,10 @@ const FAILED_STATUSES: CallStatus[] = [
 
 function filterLogsForStore(
   logs: CallLogEntry[] | undefined,
-  storeDomain: string | null
+  storeDomain: string | null,
 ): CallLogEntry[] {
   const safe = logs ?? [];
-  return storeDomain
-    ? safe.filter((l) => l.storeDomain === storeDomain)
-    : safe;
+  return storeDomain ? safe.filter((l) => l.storeDomain === storeDomain) : safe;
 }
 
 function computeMetricsFromLogs(logs: CallLogEntry[]): AnalyticsMetrics {
@@ -95,7 +97,7 @@ function computeMetricsFromLogs(logs: CallLogEntry[]): AnalyticsMetrics {
       }
       return acc;
     },
-    { ...INITIAL_METRICS }
+    { ...INITIAL_METRICS },
   );
 }
 
@@ -108,7 +110,7 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
     set((state) => ({
       selectedStoreDomain: domain,
       metrics: computeMetricsFromLogs(
-        filterLogsForStore(state.callLogs, domain)
+        filterLogsForStore(state.callLogs, domain),
       ),
     })),
 
@@ -122,7 +124,7 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
     set({
       callLogs,
       metrics: computeMetricsFromLogs(
-        filterLogsForStore(callLogs, get().selectedStoreDomain)
+        filterLogsForStore(callLogs, get().selectedStoreDomain),
       ),
     });
   },
@@ -154,7 +156,7 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
               aiSummary: aiSummary ?? log.aiSummary,
               updatedAt: new Date().toISOString(),
             }
-          : log
+          : log,
       );
 
       const filtered = state.selectedStoreDomain

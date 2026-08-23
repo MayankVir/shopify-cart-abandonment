@@ -37,7 +37,7 @@ import {
   getCachedAdminTokenInfo,
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
-import { canStopCall } from "@/lib/call-status";
+import { canStopCall, nextCallScheduledFlag } from "@/lib/call-status";
 import {
   SHEET_SYNC_PAGE_SIZE,
   syncAbandonedCheckoutsFromSheet,
@@ -292,39 +292,38 @@ export async function getAbandonedCheckoutsForStore(
   return { success: true, ...result };
 }
 
-export async function syncAbandonedCheckouts(
-  storeDomain: string,
+async function applyAutoCallEnrollment(storeDomain: string, enabled: boolean) {
+  if (enabled) {
+    await db.abandonedCheckout.updateMany({
+      where: {
+        storeDomain,
+        callStatus: CallStatus.PENDING,
+        customerPhone: { not: "" },
+      },
+      data: { callScheduled: true },
+    });
+    return;
+  }
+
+  await db.abandonedCheckout.updateMany({
+    where: {
+      storeDomain,
+      callStatus: CallStatus.PENDING,
+    },
+    data: { callScheduled: false },
+  });
+}
+
+async function dispatchDueAutoCalls(storeDomain: string, enabled: boolean) {
+  if (!enabled) return undefined;
+  return processScheduledCallsForStore(storeDomain);
+}
+
+export async function syncAbandonedCheckoutsForStore(
+  store: NonNullable<Awaited<ReturnType<typeof db.store.findUnique>>>,
   options: SyncOptions = {}
 ): Promise<SyncResult> {
-  const { userId } = await auth();
-  if (!userId) {
-    return {
-      success: false,
-      checkouts: [],
-      syncedAt: new Date().toISOString(),
-      error: "Unauthorized",
-    };
-  }
-
-  const accessError = await guardStoreAccess(storeDomain);
-  if (accessError) {
-    return {
-      success: false,
-      checkouts: [],
-      syncedAt: new Date().toISOString(),
-      error: accessError,
-    };
-  }
-
-  const store = await db.store.findUnique({ where: { storeDomain } });
-  if (!store) {
-    return {
-      success: false,
-      checkouts: [],
-      syncedAt: new Date().toISOString(),
-      error: "Store not found",
-    };
-  }
+  const storeDomain = store.storeDomain;
 
   try {
     if (store.checkoutSyncMode === CheckoutSyncMode.SHEET) {
@@ -464,9 +463,18 @@ export async function syncAbandonedCheckouts(
               ? {
                   callStatus: CallStatus.PENDING,
                   lastError: null,
-                  callScheduled: false,
+                  callScheduled: nextCallScheduledFlag(
+                    store.autoCallsEnabled,
+                    phone || existing.customerPhone
+                  ),
                 }
-              : {}),
+              : {
+                  callScheduled: nextCallScheduledFlag(
+                    store.autoCallsEnabled,
+                    phone || existing.customerPhone,
+                    existing
+                  ),
+                }),
           },
         });
       } else {
@@ -481,7 +489,7 @@ export async function syncAbandonedCheckouts(
             lineItemsJson,
             shopifyCreatedAt,
             scheduledCallAt,
-            callScheduled: false,
+            callScheduled: nextCallScheduledFlag(store.autoCallsEnabled, phone),
             callStatus: CallStatus.PENDING,
             storeDomain,
           },
@@ -517,6 +525,48 @@ export async function syncAbandonedCheckouts(
       error: raw,
     };
   }
+}
+
+export async function syncAbandonedCheckouts(
+  storeDomain: string,
+  options: SyncOptions = {}
+): Promise<SyncResult> {
+  const { userId } = await auth();
+  if (!userId) {
+    return {
+      success: false,
+      checkouts: [],
+      syncedAt: new Date().toISOString(),
+      error: "Unauthorized",
+    };
+  }
+
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return {
+      success: false,
+      checkouts: [],
+      syncedAt: new Date().toISOString(),
+      error: accessError,
+    };
+  }
+
+  const store = await db.store.findUnique({ where: { storeDomain } });
+  if (!store) {
+    return {
+      success: false,
+      checkouts: [],
+      syncedAt: new Date().toISOString(),
+      error: "Store not found",
+    };
+  }
+
+  const result = await syncAbandonedCheckoutsForStore(store, options);
+  const autoCalls = await dispatchDueAutoCalls(
+    storeDomain,
+    store.autoCallsEnabled && result.success
+  );
+  return autoCalls ? { ...result, autoCalls } : result;
 }
 
 export async function initiateRecoveryCall(
@@ -751,6 +801,7 @@ export async function getStoreRecoverySettings(storeDomain: string) {
       storeDomain: true,
       callDelayMinutes: true,
       sipConcurrency: true,
+      autoCallsEnabled: true,
       checkoutSyncMode: true,
       sheetUrl: true,
       sheetSyncDirection: true,
@@ -820,11 +871,17 @@ export async function updateStoreSheetSettings(
 export async function updateStoreRecoverySettings(
   storeDomain: string,
   callDelayMinutes: number,
-  sipConcurrency?: number
+  sipConcurrency?: number,
+  autoCallsEnabled?: boolean
 ): Promise<{ success: boolean; error?: string }> {
   const { userId } = await auth();
   if (!userId) {
     return { success: false, error: "Unauthorized" };
+  }
+
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
   }
 
   if (callDelayMinutes < 1 || callDelayMinutes > 1440) {
@@ -844,11 +901,45 @@ export async function updateStoreRecoverySettings(
 
   await db.store.update({
     where: { storeDomain },
-    data: { callDelayMinutes, sipConcurrency: concurrency },
+    data: {
+      callDelayMinutes,
+      sipConcurrency: concurrency,
+      ...(autoCallsEnabled !== undefined ? { autoCallsEnabled } : {}),
+    },
   });
+
+  if (autoCallsEnabled !== undefined) {
+    await applyAutoCallEnrollment(storeDomain, autoCallsEnabled);
+    await dispatchDueAutoCalls(storeDomain, autoCallsEnabled);
+  }
 
   revalidatePath("/dashboard/analytics");
   revalidatePath("/dashboard/billing");
+  revalidatePath("/dashboard/recovery");
+  return { success: true };
+}
+
+export async function updateStoreAutoCallsEnabled(
+  storeDomain: string,
+  enabled: boolean
+): Promise<{ success: boolean; error?: string }> {
+  const { userId } = await auth();
+  if (!userId) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
+  }
+
+  await db.store.update({
+    where: { storeDomain },
+    data: { autoCallsEnabled: enabled },
+  });
+  await applyAutoCallEnrollment(storeDomain, enabled);
+  await dispatchDueAutoCalls(storeDomain, enabled);
+
   revalidatePath("/dashboard/recovery");
   return { success: true };
 }
@@ -894,18 +985,28 @@ export async function verifyStoreShopifyAccess(
 
 export async function runAutoCallCron(): Promise<{
   stores: number;
+  synced: number;
   processed: number;
   errors: number;
 }> {
-  const stores = await db.store.findMany({ select: { storeDomain: true } });
+  const stores = await db.store.findMany({
+    where: { autoCallsEnabled: true },
+  });
+  let synced = 0;
   let processed = 0;
   let errors = 0;
 
   for (const store of stores) {
+    if (store.checkoutSyncMode !== CheckoutSyncMode.WEBHOOK) {
+      const syncResult = await syncAbandonedCheckoutsForStore(store);
+      if (syncResult.success) synced += 1;
+      else errors += 1;
+    }
+
     const result = await processScheduledCallsForStore(store.storeDomain);
     processed += result.processed;
     errors += result.errors;
   }
 
-  return { stores: stores.length, processed, errors };
+  return { stores: stores.length, synced, processed, errors };
 }

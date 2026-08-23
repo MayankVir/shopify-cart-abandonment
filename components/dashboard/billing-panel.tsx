@@ -10,6 +10,7 @@ import { type AnalyticsDateRange } from "@/lib/analytics";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
 import {
   getMerchantBillingOverview,
+  getMerchantBillingSummary,
   previewTopUpMinutes,
   startTopUpCheckout,
   syncBillingTopUps,
@@ -25,6 +26,12 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMinutes } from "@/lib/analytics";
+import {
+  ChartCardSkeleton,
+  MetricsGridSkeleton,
+  TableCardSkeleton,
+} from "@/components/dashboard/dashboard-page-skeleton";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const PRESET_AMOUNTS = [10, 30, 50, 100];
 
@@ -32,10 +39,12 @@ export function BillingPanel() {
   const searchParams = useSearchParams();
   const [dateRange, setDateRange] = useState<AnalyticsDateRange>("30d");
   const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
-  const { data } = useStoreAnalytics(dateRange);
+  const { data, isLoading: isLoadingUsage } = useStoreAnalytics(dateRange);
   const [billing, setBilling] = useState<Awaited<
     ReturnType<typeof getMerchantBillingOverview>
   > | null>(null);
+  const [isLoadingBilling, setIsLoadingBilling] = useState(true);
+  const [fastMinutes, setFastMinutes] = useState<number | null>(null);
   const [amountUsd, setAmountUsd] = useState("30");
   const [previewMinutes, setPreviewMinutes] = useState<number | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -45,7 +54,10 @@ export function BillingPanel() {
   const topUpStatus = searchParams.get("topup");
 
   const loadBilling = () => {
-    getMerchantBillingOverview().then(setBilling);
+    setIsLoadingBilling(true);
+    getMerchantBillingOverview()
+      .then(setBilling)
+      .finally(() => setIsLoadingBilling(false));
   };
 
   const syncPending = async () => {
@@ -56,6 +68,9 @@ export function BillingPanel() {
   };
 
   useEffect(() => {
+    getMerchantBillingSummary().then((summary) => {
+      if (summary) setFastMinutes(summary.creditBalanceMinutes);
+    });
     loadBilling();
   }, []);
 
@@ -84,7 +99,8 @@ export function BillingPanel() {
 
   const rate = billing?.ratePerMinuteUsd ?? 0.08;
   const estimatedCost = (data.summary.totalMinutes * rate).toFixed(2);
-  const creditBalance = billing?.creditBalanceMinutes ?? 0;
+  const creditBalance = billing?.creditBalanceMinutes ?? fastMinutes ?? 0;
+  const minutesReady = billing != null || fastMinutes != null;
 
   const statusMessage = useMemo(() => {
     if (topUpStatus === "success") {
@@ -132,7 +148,9 @@ export function BillingPanel() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-base font-semibold">Add minutes</CardTitle>
             <Badge variant="outline" className="font-mono text-xs">
-              {creditBalance.toFixed(2)} min · ${rate.toFixed(2)}/min
+              {minutesReady
+                ? `${creditBalance.toFixed(2)} min · $${rate.toFixed(2)}/min`
+                : "Loading minutes…"}
             </Badge>
           </div>
           <CardDescription className="text-xs">
@@ -224,71 +242,83 @@ export function BillingPanel() {
         <AnalyticsDateRangeSelect value={dateRange} onChange={setDateRange} />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Account Minutes
-            </CardTitle>
-            <Wallet className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{creditBalance.toFixed(2)}</div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Shared across all your stores
-            </p>
-          </CardContent>
-        </Card>
+      {isLoadingUsage && data.summary.totalCalls === 0 ? (
+        <MetricsGridSkeleton count={4} />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Account Minutes
+              </CardTitle>
+              <Wallet className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              {minutesReady ? (
+                <div className="text-3xl font-bold">
+                  {creditBalance.toFixed(2)}
+                </div>
+              ) : (
+                <Skeleton className="h-9 w-24" />
+              )}
+              <p className="mt-1 text-xs text-muted-foreground">
+                Shared across all your stores
+              </p>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Sessions
-            </CardTitle>
-            <PhoneCall className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{data.summary.totalCalls}</div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {selectedStoreDomain ? "Selected store" : "Select a store"}
-            </p>
-          </CardContent>
-        </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Total Sessions
+              </CardTitle>
+              <PhoneCall className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold">{data.summary.totalCalls}</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {selectedStoreDomain ? "Selected store" : "Select a store"}
+              </p>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Minutes Consumed
-            </CardTitle>
-            <Clock className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">
-              {formatMinutes(data.summary.totalDurationSec)}
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {data.summary.totalMinutes} min in period
-            </p>
-          </CardContent>
-        </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Minutes Consumed
+              </CardTitle>
+              <Clock className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold">
+                {formatMinutes(data.summary.totalDurationSec)}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {data.summary.totalMinutes} min in period
+              </p>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Estimated Usage
-            </CardTitle>
-            <CreditCard className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">${estimatedCost}</div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              @ ${rate.toFixed(2)}/min USD
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Estimated Usage
+              </CardTitle>
+              <CreditCard className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold">${estimatedCost}</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                @ ${rate.toFixed(2)}/min USD
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
-      {billing?.recentTopUps?.length ? (
+      {isLoadingBilling && !billing?.recentTopUps?.length ? (
+        <TableCardSkeleton rows={3} />
+      ) : billing?.recentTopUps?.length ? (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2">
             <CardTitle className="text-base">Recent top-ups</CardTitle>
@@ -336,10 +366,14 @@ export function BillingPanel() {
         </Card>
       ) : null}
 
-      <TtaiTimeSeriesPanel
-        points={data.timeSeries}
-        scenarioName={data.scenarioName}
-      />
+      {isLoadingUsage && data.timeSeries.length === 0 ? (
+        <ChartCardSkeleton />
+      ) : (
+        <TtaiTimeSeriesPanel
+          points={data.timeSeries}
+          scenarioName={data.scenarioName}
+        />
+      )}
     </div>
   );
 }

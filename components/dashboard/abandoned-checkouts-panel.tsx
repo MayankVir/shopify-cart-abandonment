@@ -13,10 +13,12 @@ import {
 import {
   getAbandonedCheckoutsForStore,
   getCallAttemptsForCheckout,
+  getStoreRecoverySettings,
   bulkStopRecoveryCallAction,
   initiateRecoveryCall,
   stopRecoveryCallAction,
   syncAbandonedCheckouts,
+  updateStoreAutoCallsEnabled,
   type AbandonedCheckoutRow,
   type CallAttemptRow,
   type SheetPageInfo,
@@ -47,16 +49,30 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { RecoverySettings } from "@/components/dashboard/recovery-settings";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { TtaiCallDetails } from "@/components/dashboard/ttai-call-details";
 import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
 import { CallStatus } from "@prisma/client";
 
+function formatScheduledWhen(scheduledCallAt: string | null): string | null {
+  if (!scheduledCallAt) return null;
+  return new Date(scheduledCallAt).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 function TimeToCallCell({
   scheduledCallAt,
   callStatus,
+  callScheduled,
+  lastError,
 }: {
   scheduledCallAt: string | null;
   callStatus: CallStatus;
+  callScheduled: boolean;
+  lastError: string | null;
 }) {
   const [, tick] = useState(0);
 
@@ -66,38 +82,64 @@ function TimeToCallCell({
     return () => clearInterval(id);
   }, [callStatus]);
 
-  if (isActiveCall(callStatus)) {
-    return <span className="text-sm text-blue-400">Calling now…</span>;
+  const when = formatScheduledWhen(scheduledCallAt);
+
+  if (callStatus === CallStatus.PREPARING) {
+    return (
+      <div className="space-y-0.5">
+        <span className="text-sm font-medium text-blue-400">Preparing call…</span>
+        {when ? <p className="text-xs text-muted-foreground">{when}</p> : null}
+      </div>
+    );
+  }
+
+  if (callStatus === CallStatus.DISPATCHED) {
+    return (
+      <div className="space-y-0.5">
+        <span className="text-sm font-medium text-blue-400">Calling now…</span>
+        {when ? <p className="text-xs text-muted-foreground">{when}</p> : null}
+      </div>
+    );
   }
 
   if (callStatus !== CallStatus.PENDING) {
     return (
-      <span className="text-sm text-muted-foreground">
-        {formatCallStatus(callStatus)}
-      </span>
+      <div className="space-y-0.5">
+        <span className="text-sm text-muted-foreground">
+          {formatCallStatus(callStatus)}
+        </span>
+        {lastError ? (
+          <p className="max-w-[16rem] truncate text-xs text-destructive" title={lastError}>
+            {lastError}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (!callScheduled) {
+    return (
+      <div className="space-y-0.5">
+        <span className="text-sm text-muted-foreground">Not scheduled</span>
+        {when ? (
+          <p className="text-xs text-muted-foreground">Eligible {when}</p>
+        ) : null}
+      </div>
     );
   }
 
   const { label, isReady } = formatTimeUntilCall(
     scheduledCallAt ? new Date(scheduledCallAt) : null,
   );
-  const scheduledDate = scheduledCallAt ? new Date(scheduledCallAt) : null;
 
   return (
     <div className="space-y-0.5">
       <span
         className={`text-sm font-medium ${isReady ? "text-emerald-400" : "text-amber-400"}`}
       >
-        {isReady ? "Ready to call" : `In ${label}`}
+        {isReady ? "Due now" : `Scheduled in ${label}`}
       </span>
-      {scheduledDate && !isReady && (
-        <p className="text-xs text-muted-foreground">
-          {scheduledDate.toLocaleString([], {
-            dateStyle: "short",
-            timeStyle: "short",
-          })}
-        </p>
-      )}
+      {when ? <p className="text-xs text-muted-foreground">{when}</p> : null}
     </div>
   );
 }
@@ -226,8 +268,12 @@ function CheckoutRow({
     });
   }
 
+  const isScheduledPending =
+    checkout.callStatus === CallStatus.PENDING && checkout.callScheduled;
   const showCallButton =
-    canInitiateCall(checkout.callStatus) && checkout.customerPhone;
+    canInitiateCall(checkout.callStatus) &&
+    Boolean(checkout.customerPhone) &&
+    !isScheduledPending;
   const showStopButton = canStopCall(
     checkout.callStatus,
     checkout.callScheduled,
@@ -270,21 +316,35 @@ function CheckoutRow({
           <TimeToCallCell
             scheduledCallAt={checkout.scheduledCallAt}
             callStatus={checkout.callStatus}
+            callScheduled={checkout.callScheduled}
+            lastError={checkout.lastError}
           />
         </TableCell>
         <TableCell>
           <div className="space-y-1">
-            <Badge variant={STATUS_VARIANT[checkout.callStatus]}>
-              {formatCallStatus(checkout.callStatus)}
-            </Badge>
-            {checkout.draftOrderId && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge variant={STATUS_VARIANT[checkout.callStatus]}>
+                {formatCallStatus(checkout.callStatus)}
+              </Badge>
+              {isScheduledPending ? (
+                <Badge variant="info">Scheduled</Badge>
+              ) : null}
+            </div>
+            {checkout.lastError ? (
+              <p
+                className="max-w-[14rem] truncate text-[11px] text-destructive"
+                title={checkout.lastError}
+              >
+                {checkout.lastError}
+              </p>
+            ) : checkout.draftOrderId ? (
               <p
                 className="truncate font-mono text-[11px] text-muted-foreground"
                 title={checkout.draftOrderId}
               >
                 {checkout.draftOrderId}
               </p>
-            )}
+            ) : null}
           </div>
         </TableCell>
         <TableCell className="text-right">
@@ -319,15 +379,14 @@ function CheckoutRow({
                 )}
                 Call now
               </Button>
-            ) : !showStopButton ? (
-              <Collapsible open={open} onOpenChange={setOpen}>
-                <CollapsibleTrigger asChild>
-                  <Button size="sm" variant="ghost">
-                    Details
-                  </Button>
-                </CollapsibleTrigger>
-              </Collapsible>
             ) : null}
+            <Collapsible open={open} onOpenChange={setOpen}>
+              <CollapsibleTrigger asChild>
+                <Button size="sm" variant="ghost">
+                  Details
+                </Button>
+              </CollapsibleTrigger>
+            </Collapsible>
           </div>
         </TableCell>
       </TableRow>
@@ -364,6 +423,8 @@ export function AbandonedCheckoutsPanel() {
   );
   const [isLoadingMore, startLoadMore] = useTransition();
   const [isLoadingCheckouts, setIsLoadingCheckouts] = useState(false);
+  const [autoCallsEnabled, setAutoCallsEnabled] = useState(false);
+  const [isTogglingAutoCalls, startToggleAutoCalls] = useTransition();
 
   const stoppableCheckouts = checkouts.filter((checkout) =>
     canStopCall(checkout.callStatus, checkout.callScheduled),
@@ -544,6 +605,20 @@ export function AbandonedCheckoutsPanel() {
 
   useEffect(() => {
     if (!selectedStoreDomain) return;
+
+    let active = true;
+    getStoreRecoverySettings(selectedStoreDomain).then((settings) => {
+      if (!active || !settings) return;
+      setAutoCallsEnabled(settings.autoCallsEnabled);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedStoreDomain, showSettings]);
+
+  useEffect(() => {
+    if (!selectedStoreDomain) return;
     void refreshOpenCheckouts({ silent: true });
   }, [callLogs, selectedStoreDomain, refreshOpenCheckouts]);
 
@@ -561,6 +636,37 @@ export function AbandonedCheckoutsPanel() {
     refreshOpenCheckouts,
   ]);
 
+  useEffect(() => {
+    if (!selectedStoreDomain || !autoCallsEnabled) return;
+
+    const interval = setInterval(() => {
+      runSync();
+    }, 5 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, [selectedStoreDomain, autoCallsEnabled, runSync]);
+
+  function handleAutoCallToggle(enabled: boolean) {
+    if (!selectedStoreDomain || isTogglingAutoCalls) return;
+    startToggleAutoCalls(async () => {
+      const result = await updateStoreAutoCallsEnabled(
+        selectedStoreDomain,
+        enabled,
+      );
+      if (!result.success) {
+        toast.error(result.error ?? "Failed to update auto-call");
+        return;
+      }
+      setAutoCallsEnabled(enabled);
+      toast.success(
+        enabled
+          ? "Auto-call on. Due rows will be dialed one at a time."
+          : "Auto-call off. Pending schedules were cancelled.",
+      );
+      void refreshOpenCheckouts({ silent: true });
+    });
+  }
+
   if (!selectedStoreDomain) return null;
 
   return (
@@ -573,6 +679,26 @@ export function AbandonedCheckoutsPanel() {
               : "Not synced yet"}
           </span>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="mr-1 flex items-center gap-2">
+              <Switch
+                id="toolbar-auto-calls"
+                checked={autoCallsEnabled}
+                disabled={isTogglingAutoCalls}
+                onCheckedChange={handleAutoCallToggle}
+              />
+              <Label
+                htmlFor="toolbar-auto-calls"
+                className="text-xs font-medium"
+              >
+                Auto-call
+              </Label>
+              {isTogglingAutoCalls ? (
+                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  {autoCallsEnabled ? "Turning off…" : "Turning on…"}
+                </span>
+              ) : null}
+            </div>
             <Button
               variant="outline"
               size="sm"
@@ -671,7 +797,7 @@ export function AbandonedCheckoutsPanel() {
                     <TableHead>Customer</TableHead>
                     <TableHead>Value</TableHead>
                     <TableHead>Address</TableHead>
-                    <TableHead>Time to call</TableHead>
+                    <TableHead>Schedule</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Action</TableHead>
                   </TableRow>
