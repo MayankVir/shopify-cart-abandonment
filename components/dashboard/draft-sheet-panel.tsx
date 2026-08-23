@@ -134,11 +134,11 @@ export function DraftSheetPanel() {
   }
 
   async function handleRetryFailed() {
-    const failedRows = [
-      ...new Set(
+    const failedRows = Array.from(
+      new Set(
         log.filter((row) => row.status === "failed").map((row) => row.sheetRow)
-      ),
-    ];
+      )
+    );
     if (!failedRows.length) return;
     await runBatches({
       skipExisting: false,
