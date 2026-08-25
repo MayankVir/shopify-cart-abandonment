@@ -25,7 +25,7 @@ interface SidebarUserProps {
 }
 
 function formatMinutes(value: number): string {
-  return value.toFixed(2);
+  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
 }
 
 export function SidebarUser({ account }: SidebarUserProps) {
@@ -45,9 +45,15 @@ export function SidebarUser({ account }: SidebarUserProps) {
     if (!isLoaded) return;
 
     const refresh = () => {
-      refreshMerchantCreditBalance().then((balance) => {
-        setMinutes(balance);
-      });
+      refreshMerchantCreditBalance()
+        .then((balance) => {
+          if (typeof balance === "number" && Number.isFinite(balance)) {
+            setMinutes(balance);
+          }
+        })
+        .catch((error) => {
+          console.error("Failed to refresh merchant credit balance:", error);
+        });
     };
 
     refresh();
