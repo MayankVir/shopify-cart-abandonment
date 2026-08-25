@@ -1,6 +1,5 @@
 "use server";
 
-import { auth } from "@clerk/nextjs/server";
 import { CallStatus } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
@@ -8,6 +7,16 @@ import { canInitiateCall } from "@/lib/call-status";
 import { runNdrcCallPipeline, stopNdrcCall } from "@/lib/ndrc-pipeline";
 import { syncNdrcOrdersFromSheet } from "@/lib/ndrc-sheet-sync";
 import { formatShippingAddressFromUserContext } from "@/lib/shipping-address";
+import { assertStoreAccess, StoreAccessError } from "@/lib/store-access";
+
+async function guardStoreAccess(storeDomain: string): Promise<string | null> {
+  try {
+    await assertStoreAccess(storeDomain);
+    return null;
+  } catch (error) {
+    return error instanceof StoreAccessError ? error.message : "Forbidden";
+  }
+}
 
 const NDRC_PAGE_SIZE = 25;
 
@@ -142,8 +151,8 @@ export async function getNdrcOrdersForStore(
   storeDomain: string,
   page = 0
 ): Promise<PaginatedNdrcOrdersResult> {
-  const { userId } = await auth();
-  if (!userId) {
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
     return {
       success: false,
       orders: [],
@@ -151,7 +160,7 @@ export async function getNdrcOrdersForStore(
       pageSize: NDRC_PAGE_SIZE,
       hasMore: false,
       totalCount: 0,
-      error: "Unauthorized",
+      error: accessError,
     };
   }
 
@@ -173,9 +182,9 @@ export async function getNdrcOrdersForStore(
 }
 
 export async function syncNdrcOrders(storeDomain: string): Promise<NdrcSyncResult> {
-  const { userId } = await auth();
-  if (!userId) {
-    return { success: false, orders: [], syncedAt: new Date().toISOString(), error: "Unauthorized" };
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, orders: [], syncedAt: new Date().toISOString(), error: accessError };
   }
 
   const store = await db.store.findUnique({ where: { storeDomain } });
@@ -228,14 +237,14 @@ export async function syncNdrcOrders(storeDomain: string): Promise<NdrcSyncResul
 export async function initiateNdrcCall(
   orderId: string
 ): Promise<{ success: boolean; error?: string }> {
-  const { userId } = await auth();
-  if (!userId) return { success: false, error: "Unauthorized" };
-
   const order = await db.ndrcOrder.findUnique({
     where: { id: orderId },
     include: { store: true },
   });
   if (!order) return { success: false, error: "Order not found" };
+
+  const accessError = await guardStoreAccess(order.storeDomain);
+  if (accessError) return { success: false, error: accessError };
 
   if (!canInitiateCall(order.callStatus)) {
     return { success: false, error: "Call cannot be started for this order" };
@@ -250,11 +259,11 @@ export async function initiateNdrcCall(
 export async function stopNdrcCallAction(
   orderId: string
 ): Promise<{ success: boolean; error?: string }> {
-  const { userId } = await auth();
-  if (!userId) return { success: false, error: "Unauthorized" };
-
   const order = await db.ndrcOrder.findUnique({ where: { id: orderId } });
   if (!order) return { success: false, error: "Order not found" };
+
+  const accessError = await guardStoreAccess(order.storeDomain);
+  if (accessError) return { success: false, error: accessError };
 
   const result = await stopNdrcCall(order);
   revalidatePath("/dashboard/ndrc");
@@ -263,8 +272,14 @@ export async function stopNdrcCallAction(
 }
 
 export async function getNdrcCallAttempts(orderId: string): Promise<NdrcCallAttemptRow[]> {
-  const { userId } = await auth();
-  if (!userId) return [];
+  const order = await db.ndrcOrder.findUnique({
+    where: { id: orderId },
+    select: { storeDomain: true },
+  });
+  if (!order) return [];
+
+  const accessError = await guardStoreAccess(order.storeDomain);
+  if (accessError) return [];
 
   const attempts = await db.ndrcCallAttempt.findMany({
     where: { ndrcOrderId: orderId },
@@ -275,8 +290,8 @@ export async function getNdrcCallAttempts(orderId: string): Promise<NdrcCallAtte
 }
 
 export async function getStoreNdrcSettings(storeDomain: string) {
-  const { userId } = await auth();
-  if (!userId) return null;
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) return null;
 
   return db.store.findUnique({
     where: { storeDomain },
@@ -297,8 +312,8 @@ export async function updateStoreNdrcSettings(
   storeDomain: string,
   input: { ndrcSheetUrl: string; ndrcMinAttempts: number }
 ): Promise<{ success: boolean; error?: string }> {
-  const { userId } = await auth();
-  if (!userId) return { success: false, error: "Unauthorized" };
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) return { success: false, error: accessError };
 
   const ndrcSheetUrl = input.ndrcSheetUrl.trim();
   const ndrcMinAttempts = Number(input.ndrcMinAttempts);

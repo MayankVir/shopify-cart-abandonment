@@ -4,6 +4,10 @@ import { encryptToken } from "@/lib/encryption";
 import { fetchShopName } from "@/lib/shopify-admin";
 import { ensureMerchantForUser } from "@/lib/billing";
 import { normalizeStoreDomain } from "@/lib/store-domain";
+import {
+  isStoreOwnedBySomeoneElse,
+  STORE_OWNED_ELSEWHERE_MESSAGE,
+} from "@/lib/store-access";
 
 function decodeOAuthState(state: string): {
   userId: string;
@@ -84,6 +88,12 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  if (await isStoreOwnedBySomeoneElse(storeDomain, oauthState.userId)) {
+    const redirectUrl = new URL(`${appUrl}/dashboard/onboarding`);
+    redirectUrl.searchParams.set("error", STORE_OWNED_ELSEWHERE_MESSAGE);
+    return NextResponse.redirect(redirectUrl);
+  }
+
   await ensureMerchantForUser(oauthState.userId);
 
   await db.store.upsert({
@@ -95,7 +105,6 @@ export async function GET(request: NextRequest) {
       storefrontToken: encryptToken(""),
     },
     update: {
-      clerkUserId: oauthState.userId,
       adminAccessToken: encryptToken(tokenData.access_token),
     },
   });

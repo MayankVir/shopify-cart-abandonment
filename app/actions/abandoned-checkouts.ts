@@ -632,17 +632,17 @@ export async function initiateRecoveryCall(
 export async function stopRecoveryCallAction(
   checkoutId: string
 ): Promise<{ success: boolean; error?: string }> {
-  const { userId } = await auth();
-  if (!userId) {
-    return { success: false, error: "Unauthorized" };
-  }
-
   const checkout = await db.abandonedCheckout.findUnique({
     where: { id: checkoutId },
   });
 
   if (!checkout) {
     return { success: false, error: "Checkout not found" };
+  }
+
+  const accessError = await guardStoreAccess(checkout.storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
   }
 
   const result = await stopRecoveryCall(checkout);
@@ -663,14 +663,14 @@ export async function bulkStopRecoveryCallAction(
   errors: string[];
   error?: string;
 }> {
-  const { userId } = await auth();
-  if (!userId) {
+  const accessError0 = await guardStoreAccess(storeDomain);
+  if (accessError0) {
     return {
       success: false,
       stopped: 0,
       failed: 0,
       errors: [],
-      error: "Unauthorized",
+      error: accessError0,
     };
   }
 
@@ -730,8 +730,14 @@ export async function bulkStopRecoveryCallAction(
 export async function getCallAttemptsForCheckout(
   checkoutId: string
 ): Promise<CallAttemptRow[]> {
-  const { userId } = await auth();
-  if (!userId) return [];
+  const checkout = await db.abandonedCheckout.findUnique({
+    where: { id: checkoutId },
+    select: { storeDomain: true },
+  });
+  if (!checkout) return [];
+
+  const accessError = await guardStoreAccess(checkout.storeDomain);
+  if (accessError) return [];
 
   const attempts = await db.callAttempt.findMany({
     where: { abandonedCheckoutId: checkoutId },
@@ -750,8 +756,8 @@ export async function getLastWebhookStatus(): Promise<WebhookDebugInfo | null> {
 export async function getStoreCheckoutSyncMode(
   storeDomain: string
 ): Promise<CheckoutSyncModeValue | null> {
-  const { userId } = await auth();
-  if (!userId) return null;
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) return null;
 
   const store = await db.store.findUnique({
     where: { storeDomain },
@@ -765,9 +771,9 @@ export async function updateStoreCheckoutSyncMode(
   storeDomain: string,
   mode: CheckoutSyncModeValue
 ): Promise<{ success: boolean; error?: string }> {
-  const { userId } = await auth();
-  if (!userId) {
-    return { success: false, error: "Unauthorized" };
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
   }
 
   if (!isCheckoutSyncMode(mode)) {
@@ -792,8 +798,8 @@ export async function updateStoreCheckoutSyncMode(
 }
 
 export async function getStoreRecoverySettings(storeDomain: string) {
-  const { userId } = await auth();
-  if (!userId) return null;
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) return null;
 
   return db.store.findUnique({
     where: { storeDomain },
@@ -820,9 +826,9 @@ export async function updateStoreSheetSettings(
     sheetSyncDirection?: "TOP" | "BOTTOM";
   }
 ): Promise<{ success: boolean; error?: string }> {
-  const { userId } = await auth();
-  if (!userId) {
-    return { success: false, error: "Unauthorized" };
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
   }
 
   const sheetUrl = input.sheetUrl.trim();
@@ -874,11 +880,6 @@ export async function updateStoreRecoverySettings(
   sipConcurrency?: number,
   autoCallsEnabled?: boolean
 ): Promise<{ success: boolean; error?: string }> {
-  const { userId } = await auth();
-  if (!userId) {
-    return { success: false, error: "Unauthorized" };
-  }
-
   const accessError = await guardStoreAccess(storeDomain);
   if (accessError) {
     return { success: false, error: accessError };
@@ -923,11 +924,6 @@ export async function updateStoreAutoCallsEnabled(
   storeDomain: string,
   enabled: boolean
 ): Promise<{ success: boolean; error?: string }> {
-  const { userId } = await auth();
-  if (!userId) {
-    return { success: false, error: "Unauthorized" };
-  }
-
   const accessError = await guardStoreAccess(storeDomain);
   if (accessError) {
     return { success: false, error: accessError };
@@ -947,11 +943,11 @@ export async function updateStoreAutoCallsEnabled(
 export async function verifyStoreShopifyAccess(
   storeDomain: string
 ): Promise<AdminAccessVerification> {
-  const { userId } = await auth();
-  if (!userId) {
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
     return {
       ok: false,
-      error: "Unauthorized",
+      error: accessError,
       granted: [],
       scopesOk: false,
       pollOk: false,

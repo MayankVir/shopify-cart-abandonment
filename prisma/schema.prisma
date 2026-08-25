@@ -124,8 +124,40 @@ model Store {
   updatedAt        DateTime            @updatedAt
   checkouts        AbandonedCheckout[]
   ndrcOrders       NdrcOrder[]
+  members          StoreMember[]
+  invites          StoreInvite[]
 
   @@index([clerkUserId])
+}
+
+model StoreMember {
+  id          String   @id @default(uuid())
+  storeId     String
+  clerkUserId String
+  email       String
+  createdAt   DateTime @default(now())
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, clerkUserId])
+  @@index([clerkUserId])
+}
+
+model StoreInvite {
+  id                   String    @id @default(uuid())
+  storeId              String
+  email                String
+  createdByClerkUserId String
+  expiresAt            DateTime
+  acceptedAt           DateTime?
+  declinedAt           DateTime?
+  revokedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  store                Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, email])
+  @@index([email])
+  @@index([expiresAt])
 }
 
 model AbandonedCheckout {

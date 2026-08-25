@@ -15,6 +15,7 @@ import {
   startTopUpCheckout,
   syncBillingTopUps,
 } from "@/app/actions/billing";
+import { getStoreTeam } from "@/app/actions/store-team";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -50,6 +51,7 @@ export function BillingPanel() {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [isInvitedStore, setIsInvitedStore] = useState(false);
 
   const topUpStatus = searchParams.get("topup");
 
@@ -73,6 +75,20 @@ export function BillingPanel() {
     });
     loadBilling();
   }, []);
+
+  useEffect(() => {
+    if (!selectedStoreDomain) {
+      setIsInvitedStore(false);
+      return;
+    }
+    let active = true;
+    getStoreTeam(selectedStoreDomain).then((team) => {
+      if (active) setIsInvitedStore(team?.role === "member");
+    });
+    return () => {
+      active = false;
+    };
+  }, [selectedStoreDomain]);
 
   useEffect(() => {
     if (topUpStatus !== "success") return;
@@ -131,6 +147,13 @@ export function BillingPanel() {
 
   return (
     <div className="space-y-6">
+      {isInvitedStore ? (
+        <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
+          You were invited to this store. Calls here are billed to the
+          owner&apos;s balance — the balance below is your own account and is
+          not used for this store.
+        </div>
+      ) : null}
       {statusMessage ? (
         <div
           className={`rounded-md border px-3 py-2 text-xs ${

@@ -18,6 +18,7 @@ const PREFETCH_MAIN = [
   "/dashboard/ndrc",
   "/dashboard/billing",
   "/dashboard/onboarding",
+  "/dashboard/team",
 ];
 
 const PREFETCH_ADMIN = [
@@ -31,6 +32,7 @@ interface DashboardShellProps {
   stores: Awaited<ReturnType<typeof getStoresForDashboard>>;
   showAdminLink?: boolean;
   account: SidebarAccountSummary | null;
+  pendingInviteCount?: number;
 }
 
 export function DashboardShell({
@@ -38,13 +40,18 @@ export function DashboardShell({
   stores,
   showAdminLink = false,
   account,
+  pendingInviteCount = 0,
 }: DashboardShellProps) {
   return (
     <SidebarProvider>
       <NavPendingProvider
         prefetchHrefs={showAdminLink ? PREFETCH_ADMIN : PREFETCH_MAIN}
       >
-        <AppSidebar showAdminLink={showAdminLink} account={account} />
+        <AppSidebar
+          showAdminLink={showAdminLink}
+          account={account}
+          pendingInviteCount={pendingInviteCount}
+        />
         <SidebarInset>
           <DashboardHydrator initialStores={stores} />
           <AppTopBar stores={stores} />

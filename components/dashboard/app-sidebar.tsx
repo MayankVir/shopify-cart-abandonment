@@ -11,6 +11,7 @@ import {
   Shield,
   ShoppingCart,
   Truck,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { isNavItemActive, useNavPending } from "@/components/dashboard/nav-pending";
@@ -24,6 +25,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
@@ -33,6 +35,7 @@ import {
 interface AppSidebarProps {
   showAdminLink?: boolean;
   account: SidebarAccountSummary | null;
+  pendingInviteCount?: number;
 }
 
 const MAIN_NAV = [
@@ -44,6 +47,7 @@ const MAIN_NAV = [
 
 const SETUP_NAV = [
   { href: "/dashboard/onboarding", label: "Connect Store", icon: Settings },
+  { href: "/dashboard/team", label: "Team", icon: Users },
 ] as const;
 
 function usePendingNavClick(href: string) {
@@ -110,25 +114,39 @@ function SidebarNavLink({
 
 function NavItems({
   items,
+  badges,
 }: {
   items: ReadonlyArray<{
     href: string;
     label: string;
     icon: LucideIcon;
   }>;
+  badges?: Record<string, number>;
 }) {
   return (
     <SidebarMenu>
-      {items.map(({ href, label, icon }) => (
-        <SidebarMenuItem key={href}>
-          <SidebarNavLink href={href} label={label} icon={icon} />
-        </SidebarMenuItem>
-      ))}
+      {items.map(({ href, label, icon }) => {
+        const badge = badges?.[href];
+        return (
+          <SidebarMenuItem key={href}>
+            <SidebarNavLink href={href} label={label} icon={icon} />
+            {badge ? <SidebarMenuBadge>{badge}</SidebarMenuBadge> : null}
+          </SidebarMenuItem>
+        );
+      })}
     </SidebarMenu>
   );
 }
 
-export function AppSidebar({ showAdminLink = false, account }: AppSidebarProps) {
+export function AppSidebar({
+  showAdminLink = false,
+  account,
+  pendingInviteCount = 0,
+}: AppSidebarProps) {
+  const setupBadges = pendingInviteCount > 0
+    ? { "/dashboard/team": pendingInviteCount }
+    : undefined;
+
   return (
     <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
@@ -150,7 +168,7 @@ export function AppSidebar({ showAdminLink = false, account }: AppSidebarProps) 
         <SidebarGroup>
           <SidebarGroupLabel>Setup</SidebarGroupLabel>
           <SidebarGroupContent>
-            <NavItems items={SETUP_NAV} />
+            <NavItems items={SETUP_NAV} badges={setupBadges} />
           </SidebarGroupContent>
         </SidebarGroup>
 

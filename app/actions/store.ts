@@ -27,6 +27,8 @@ import { ensureMerchantForUser } from "@/lib/billing";
 import {
   assertStoreAccess,
   getStoresForUser,
+  isStoreOwnedBySomeoneElse,
+  STORE_OWNED_ELSEWHERE_MESSAGE,
   StoreAccessError,
 } from "@/lib/store-access";
 import { requireAdmin } from "@/lib/admin-gate";
@@ -171,6 +173,10 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
       );
     }
 
+    if (await isStoreOwnedBySomeoneElse(storeDomain, userId)) {
+      return { success: false, error: STORE_OWNED_ELSEWHERE_MESSAGE };
+    }
+
     await ensureMerchantForUser(userId);
 
     await db.store.upsert({
@@ -186,7 +192,6 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
         storefrontToken: encryptToken(storefrontToken),
       },
       update: {
-        clerkUserId: userId,
         alternateShopDomains,
         ...(shopName ? { name: shopName } : {}),
         apiKey: encryptToken(apiKey),
@@ -234,6 +239,10 @@ export async function initiateOAuthConnect(
   const normalized = normalizeStoreDomain(storeDomain);
   if (!normalized) {
     return { error: "Store domain is required" };
+  }
+
+  if (await isStoreOwnedBySomeoneElse(normalized, userId)) {
+    return { error: STORE_OWNED_ELSEWHERE_MESSAGE };
   }
 
   const apiKey = process.env.SHOPIFY_API_KEY;

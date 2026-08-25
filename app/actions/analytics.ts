@@ -1,9 +1,9 @@
 "use server";
 
-import { auth } from "@clerk/nextjs/server";
 import { CallStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { durationSecFromAttempt, analyticsDateRangeToIso, type AnalyticsDateRange } from "@/lib/analytics";
+import { assertStoreAccess } from "@/lib/store-access";
 import {
   durationSecFromTtaiSession,
   fetchTtaiSessionDetails,
@@ -113,8 +113,9 @@ export async function getCallAnalyticsForStore(
   summary: CallAnalyticsSummary;
   attempts: CallAttemptRow[];
 }> {
-  const { userId } = await auth();
-  if (!userId) {
+  try {
+    await assertStoreAccess(storeDomain);
+  } catch {
     return {
       summary: emptySummary(),
       attempts: [],
@@ -202,8 +203,9 @@ export async function getStoreAnalyticsView(
   storeDomain: string,
   dateRange: AnalyticsDateRange = "30d"
 ): Promise<StoreAnalyticsView> {
-  const { userId } = await auth();
-  if (!userId) {
+  try {
+    await assertStoreAccess(storeDomain);
+  } catch {
     return {
       source: "local",
       summary: emptySummary(),
