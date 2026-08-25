@@ -1,6 +1,10 @@
 import type { Store } from "@prisma/client";
 import { type LineItemRecord } from "@/lib/line-items";
 import { resolveStoreAdminAccessToken } from "@/lib/shopify-admin-token";
+import {
+  toMailingAddressInput,
+  type ShippingAddressFields,
+} from "@/lib/shipping-address";
 
 const ADMIN_API_VERSION = "2024-10";
 
@@ -83,6 +87,8 @@ export interface CreateDraftOrderInput {
   email?: string;
   checkoutToken?: string;
   note?: string;
+  shippingAddress?: ShippingAddressFields | null;
+  customerName?: string;
 }
 
 export function hasDraftOrderId(id: string | null | undefined): boolean {
@@ -235,6 +241,23 @@ function assertUserErrors(label: string, userErrors: UserError[] | undefined) {
   throw new Error(`${label}: ${detail}`);
 }
 
+/** True if the mutation failed specifically because of the address block
+ * (bad province/zip format, unresolvable region, etc.) rather than something
+ * that should block the whole draft order (missing variants, etc.). */
+function isAddressRelatedError(userErrors: UserError[]): boolean {
+  return userErrors.some((e) => {
+    const field = (e.field ?? []).join(".").toLowerCase();
+    const message = e.message.toLowerCase();
+    return (
+      field.includes("shippingaddress") ||
+      field.includes("billingaddress") ||
+      message.includes("region") ||
+      message.includes("province") ||
+      message.includes("address")
+    );
+  });
+}
+
 function buildDraftInput(input: CreateDraftOrderInput) {
   const lineItems = input.lineItems
     .filter((item) => item.variant_gid)
@@ -258,10 +281,23 @@ function buildDraftInput(input: CreateDraftOrderInput) {
     note:
       input.note ||
       `Abandoned cart recovery${input.checkoutToken ? ` — ${input.checkoutToken}` : ""}`,
+    // Email/phone still attach an existing Shopify customer, but this stops
+    // their saved default address from being copied onto the order.
+    useCustomerDefaultAddress: false,
   };
 
   if (input.email?.trim()) draftInput.email = input.email.trim();
   if (input.phone?.trim()) draftInput.phone = input.phone.trim();
+
+  const mailingAddress = toMailingAddressInput(
+    input.shippingAddress,
+    input.customerName,
+    input.phone,
+  );
+  if (mailingAddress) {
+    draftInput.shippingAddress = mailingAddress;
+    draftInput.billingAddress = mailingAddress;
+  }
 
   return draftInput;
 }
@@ -283,7 +319,20 @@ export async function createDraftOrderForStore(
     };
   }>(store.storeDomain, token, DRAFT_ORDER_CREATE, { input: draftInput });
 
-  assertUserErrors("draftOrderCreate", data.draftOrderCreate.userErrors);
+  const userErrors = data.draftOrderCreate.userErrors;
+
+  // No silent fallback: if Shopify rejects the address, this is a hard
+  // failure — we never want a "successful" draft order that's missing the
+  // address it was supposed to carry. Just log which case it was for
+  // easier triage, then let assertUserErrors throw below.
+  if (userErrors?.length && draftInput.shippingAddress && isAddressRelatedError(userErrors)) {
+    console.warn(
+      "[shopify-draft-orders] draft order rejected: address invalid",
+      JSON.stringify({ checkoutToken: input.checkoutToken, userErrors }),
+    );
+  }
+
+  assertUserErrors("draftOrderCreate", userErrors);
 
   const draft = data.draftOrderCreate.draftOrder;
   if (!draft?.id) {

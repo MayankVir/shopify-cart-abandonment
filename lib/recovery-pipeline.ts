@@ -38,10 +38,19 @@ function parseLineItems(json: Prisma.JsonValue): LineItemRecord[] {
 
 function sheetContextFromUserContext(userContext: string): {
   shippingAddress?: ShippingAddressFields | null;
+  customerName?: string;
 } {
   if (!userContext.trim()) return {};
+  let customerName: string | undefined;
+  try {
+    const parsed = JSON.parse(userContext) as { customer_name?: string };
+    customerName = parsed.customer_name?.trim() || undefined;
+  } catch {
+    customerName = undefined;
+  }
   return {
     shippingAddress: parseShippingAddressFromUserContext(userContext),
+    customerName,
   };
 }
 
@@ -141,6 +150,8 @@ export async function runRecoveryCallPipeline(
         phone,
         email: checkout.customerEmail ?? undefined,
         checkoutToken: checkout.checkoutToken,
+        shippingAddress: sheetCtx.shippingAddress,
+        customerName: sheetCtx.customerName,
       });
 
       draftOrderId = draft.draftOrderId;

@@ -19,12 +19,29 @@ import {
   getDraftOrderContextForStore,
   serializeDraftOrderContext,
 } from "@/lib/shopify-draft-orders";
+import { normalizeSheetShipping } from "@/lib/shipping-address";
 import type { Store } from "@prisma/client";
 
 export const DRAFT_REQUIRED_COLUMNS = [
   "request_id",
   "is_abandoned",
   "customer_phone",
+  "address",
+  "pincode",
+  "state",
+  "city",
+  "customer_name",
+] as const;
+
+/** Per-row fields that must have a non-blank value or the row is skipped
+ * rather than sent to Shopify without them. `city` is intentionally excluded —
+ * it's a real column requirement above, but individual rows can legitimately
+ * have it blank (unlike address/pincode/state/customer_name). */
+export const DRAFT_ROW_REQUIRED_FIELDS = [
+  "address",
+  "pincode",
+  "state",
+  "customer_name",
 ] as const;
 
 export const DRAFT_VARIANT_COLUMNS = ["items_full_json", "variant_ids"] as const;
@@ -294,6 +311,25 @@ export async function generateDraftsForSheet(options: {
       continue;
     }
 
+    const shippingAddress = normalizeSheetShipping(record);
+    const customerName = record.customer_name?.trim() || "";
+    const missingRowFields = DRAFT_ROW_REQUIRED_FIELDS.filter((field) => {
+      if (field === "address") return !shippingAddress;
+      if (field === "customer_name") return !customerName;
+      return !record[field]?.trim();
+    });
+
+    if (missingRowFields.length) {
+      results.push({
+        sheetRow,
+        requestId,
+        status: "failed",
+        message: `Missing ${missingRowFields.join(", ")} — skipped so we don't create a draft without a complete address`,
+        wroteToSheet: false,
+      });
+      continue;
+    }
+
     try {
       const draft = await createDraftOrderForStore(options.store, {
         lineItems,
@@ -301,6 +337,8 @@ export async function generateDraftsForSheet(options: {
         email: record.email?.trim() || undefined,
         checkoutToken: requestId,
         note: `Draft fill module — ${requestId}`,
+        shippingAddress,
+        customerName,
       });
       const context = await getDraftOrderContextForStore(
         options.store,
