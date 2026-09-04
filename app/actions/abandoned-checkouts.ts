@@ -11,6 +11,10 @@ import {
 } from "@/lib/checkout-sync-mode";
 import { getLastWebhookDebug, type WebhookDebugInfo } from "@/lib/store-domain";
 import { db } from "@/lib/db";
+import {
+  DEFAULT_CALL_FEEDBACK_KEY_COLUMN,
+  inspectCallFeedbackSheet,
+} from "@/lib/call-feedback-sheet";
 import { runRecoveryCallPipeline, processScheduledCallsForStore, stopRecoveryCall } from "@/lib/recovery-pipeline";
 import { assertStoreAccess, StoreAccessError } from "@/lib/store-access";
 import {
@@ -812,6 +816,9 @@ export async function getStoreRecoverySettings(storeDomain: string) {
       sheetUrl: true,
       sheetSyncDirection: true,
       lastSheetSyncAt: true,
+      callFeedbackSheetEnabled: true,
+      callFeedbackSheetUrl: true,
+      callFeedbackKeyColumn: true,
       ttaiScenarioId: true,
       ttaiTrunkId: true,
     },
@@ -870,6 +877,90 @@ export async function updateStoreSheetSettings(
     return {
       success: false,
       error: error instanceof Error ? error.message : "Failed to save sheet settings",
+    };
+  }
+}
+
+/** Feedback write-back is independent of checkoutSyncMode — a store can sync
+ * checkouts from Shopify while still reviewing TTAI call feedback in a sheet.
+ * Not every provider's sheet uses "request_id" as its unique column (that's
+ * specific to GoKwik-sourced sheets), so the key column is configurable. When
+ * enabling, the target sheet is validated to already have the key column plus
+ * the fixed context columns (customer_name, customer_phone, email, address,
+ * city, state, pincode, product_ids, variant_ids) — unless it's completely
+ * empty, in which case the full schema is bootstrapped on first write. */
+export async function updateStoreCallFeedbackSettings(
+  storeDomain: string,
+  input: {
+    callFeedbackSheetEnabled: boolean;
+    callFeedbackSheetUrl: string;
+    callFeedbackKeyColumn: string;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
+  }
+
+  const callFeedbackSheetUrl = input.callFeedbackSheetUrl.trim();
+  const callFeedbackKeyColumn =
+    input.callFeedbackKeyColumn.trim() || DEFAULT_CALL_FEEDBACK_KEY_COLUMN;
+
+  if (input.callFeedbackSheetEnabled) {
+    const store = await db.store.findUnique({
+      where: { storeDomain },
+      select: { sheetUrl: true },
+    });
+    const targetSheetUrl = callFeedbackSheetUrl || store?.sheetUrl?.trim() || "";
+
+    if (!targetSheetUrl) {
+      return {
+        success: false,
+        error:
+          "Add a feedback sheet URL (or an import sheet URL above) before enabling write-back.",
+      };
+    }
+
+    try {
+      const inspection = await inspectCallFeedbackSheet(
+        targetSheetUrl,
+        callFeedbackKeyColumn
+      );
+      if (!inspection.isEmpty && inspection.missingRequired.length > 0) {
+        return {
+          success: false,
+          error: `Feedback sheet is missing required columns: ${inspection.missingRequired.join(", ")}. Add them to the sheet before enabling write-back.`,
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not validate the feedback sheet",
+      };
+    }
+  }
+
+  try {
+    await db.store.update({
+      where: { storeDomain },
+      data: {
+        callFeedbackSheetEnabled: input.callFeedbackSheetEnabled,
+        callFeedbackSheetUrl,
+        callFeedbackKeyColumn,
+      },
+    });
+    revalidatePath("/dashboard/recovery");
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to save call feedback sheet settings",
     };
   }
 }

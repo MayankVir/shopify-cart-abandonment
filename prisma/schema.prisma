@@ -104,6 +104,12 @@ model Store {
   /** Whether sheet sync reads from the top (oldest) or bottom (newest) of the sheet. */
   sheetSyncDirection SheetSyncDirection @default(BOTTOM)
   lastSheetSyncAt  DateTime?
+  /** When true, write TTAI call status + feedback back to a Google Sheet after each call. Independent of checkoutSyncMode. */
+  callFeedbackSheetEnabled Boolean     @default(false)
+  /** Target sheet for call feedback write-back. Falls back to `sheetUrl` when blank. */
+  callFeedbackSheetUrl     String      @default("") @db.Text
+  /** Column name in the feedback sheet that uniquely identifies a row (not always "request_id" — depends on the checkout provider). */
+  callFeedbackKeyColumn    String      @default("request_id")
   /** Other *.myshopify.com hosts for the same shop (Shopify sends webhooks on any of them). */
   alternateShopDomains String[]        @default([])
   ttaiScenarioId   String?
