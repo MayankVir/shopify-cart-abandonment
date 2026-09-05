@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Clock,
   ExternalLink,
+  FileSpreadsheet,
   Loader2,
   Phone,
   PhoneCall,
@@ -15,7 +16,10 @@ import {
 } from "lucide-react";
 import { useMemo, useState, useTransition, type ReactNode } from "react";
 import { toast } from "sonner";
-import { fetchTtaiSessionDetailsForCallLog } from "@/app/actions/store";
+import {
+  fetchTtaiSessionDetailsForCallLog,
+  writeCallFeedbackForCallLog,
+} from "@/app/actions/store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -102,6 +106,7 @@ function CallLogDetailSheet({
   onOpenChange: (open: boolean) => void;
 }) {
   const [isPending, startTransition] = useTransition();
+  const [isWritingToSheet, startWriteToSheet] = useTransition();
   const addCallLog = useAnalyticsStore((s) => s.addCallLog);
 
   const toolCallsJson = log?.latestAttempt?.toolCallsJson;
@@ -120,6 +125,18 @@ function CallLogDetailSheet({
         toast.success("Session details loaded from TTAI");
       } else {
         toast.error(result.error ?? "Failed to fetch session details");
+      }
+    });
+  }
+
+  function handleWriteToSheet() {
+    if (!log) return;
+    startWriteToSheet(async () => {
+      const result = await writeCallFeedbackForCallLog(log.id);
+      if (result.success) {
+        toast.success("Call feedback written to sheet");
+      } else {
+        toast.error(result.error ?? "Failed to write call feedback to sheet");
       }
     });
   }
@@ -221,28 +238,44 @@ function CallLogDetailSheet({
             <section className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-medium">Session details</h3>
-                {canFetchSessionDetails ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {canFetchSessionDetails ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isPending}
+                      onClick={handleFetchSessionDetails}
+                    >
+                      {isPending ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                      )}
+                      {hasSessionDetails
+                        ? "Refresh from TTAI"
+                        : "Fetch from TTAI"}
+                    </Button>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      No session ID available
+                    </span>
+                  )}
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={isPending}
-                    onClick={handleFetchSessionDetails}
+                    disabled={isWritingToSheet}
+                    onClick={handleWriteToSheet}
                   >
-                    {isPending ? (
+                    {isWritingToSheet ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     ) : (
-                      <RefreshCw className="mr-2 h-4 w-4" />
+                      <FileSpreadsheet className="mr-2 h-4 w-4" />
                     )}
-                    {hasSessionDetails
-                      ? "Refresh from TTAI"
-                      : "Fetch from TTAI"}
+                    Write to sheet
                   </Button>
-                ) : (
-                  <span className="text-xs text-muted-foreground">
-                    No session ID available
-                  </span>
-                )}
+                </div>
               </div>
 
               <TtaiCallDetails

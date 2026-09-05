@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { Webhook } from "standardwebhooks";
 import { db } from "@/lib/db";
+import {
+  buildCallFeedbackContext,
+  writeCallFeedbackIfEnabled,
+} from "@/lib/call-feedback-sheet";
 import { mapTtaiStatusToCallStatus, buildSessionSummary, fetchTtaiSessionDetails, durationSecFromTtaiSession } from "@/lib/ttai";
 import {
   minutesFromDurationSec,
@@ -366,6 +370,24 @@ export async function POST(request: NextRequest) {
       sourceId: attempt.id,
       occurredAt: endedAt ?? new Date(),
     });
+  }
+
+  if (isTerminal) {
+    const feedbackContext = buildCallFeedbackContext(attempt.checkout);
+    const feedbackResult = await writeCallFeedbackIfEnabled(attempt.checkout.store, {
+      ...feedbackContext,
+      callStatus: nextCheckoutStatus,
+      feedbackText: transcript ?? attempt.checkout.aiSummary,
+    });
+    if (!feedbackResult.ok && !feedbackResult.skipped) {
+      console.warn(
+        "[ttai-webhook] sheet feedback write failed",
+        JSON.stringify({
+          error: feedbackResult.error,
+          checkoutToken: attempt.checkout.checkoutToken,
+        })
+      );
+    }
   }
 
   return NextResponse.json({

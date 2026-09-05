@@ -9,6 +9,10 @@ import {
   attachSessionDetailsToStore,
   ensureTtaiWebhookStore,
 } from "@/lib/ttai-webhook";
+import {
+  buildCallFeedbackContext,
+  writeCallFeedbackForStore,
+} from "@/lib/call-feedback-sheet";
 import type { CallLogEntry } from "@/store/use-analytics-store";
 import { encryptToken, decryptToken } from "@/lib/encryption";
 import {
@@ -470,6 +474,60 @@ export async function fetchTtaiSessionDetailsForCallLog(checkoutId: string): Pro
     success: true,
     log: refreshed ? toCallLogEntry(refreshed) : undefined,
   };
+}
+
+/** Manual "write to sheet" action — works even when auto write-back is off, as
+ * long as a feedback sheet URL (or the import sheet URL) is configured. */
+export async function writeCallFeedbackForCallLog(checkoutId: string): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  const { userId } = await auth();
+  if (!userId) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  const checkout = await db.abandonedCheckout.findUnique({
+    where: { id: checkoutId },
+    include: {
+      store: true,
+      callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
+    },
+  });
+
+  if (!checkout) {
+    return { success: false, error: "Call log not found" };
+  }
+
+  try {
+    await assertStoreAccess(checkout.storeDomain);
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof StoreAccessError ? error.message : "Forbidden",
+    };
+  }
+
+  const attempt = checkout.callAttempts[0];
+  if (!attempt) {
+    return { success: false, error: "No call attempt found for this checkout" };
+  }
+
+  const feedbackContext = buildCallFeedbackContext(checkout);
+  const result = await writeCallFeedbackForStore(checkout.store, {
+    ...feedbackContext,
+    callStatus: checkout.callStatus,
+    feedbackText: checkout.aiSummary ?? attempt.transcript,
+  });
+
+  if (!result.ok) {
+    return {
+      success: false,
+      error: result.error ?? "Failed to write call feedback to sheet",
+    };
+  }
+
+  return { success: true };
 }
 
 export async function getCheckoutLogsForStore(storeDomain: string) {

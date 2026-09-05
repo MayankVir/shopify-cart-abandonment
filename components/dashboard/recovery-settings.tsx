@@ -13,6 +13,7 @@ import {
 } from "@/lib/sheet-sync-direction";
 import {
   getStoreRecoverySettings,
+  updateStoreCallFeedbackSettings,
   updateStoreRecoverySettings,
   updateStoreSheetSettings,
 } from "@/app/actions/abandoned-checkouts";
@@ -55,6 +56,11 @@ export function RecoverySettings({
   const [sheetUrl, setSheetUrl] = useState("");
   const [sheetSyncDirection, setSheetSyncDirection] =
     useState<SheetSyncDirectionValue>(SHEET_SYNC_DIRECTIONS.BOTTOM);
+  const [callFeedbackSheetEnabled, setCallFeedbackSheetEnabled] =
+    useState(false);
+  const [callFeedbackSheetUrl, setCallFeedbackSheetUrl] = useState("");
+  const [callFeedbackKeyColumn, setCallFeedbackKeyColumn] =
+    useState("request_id");
   const [ttaiConfigured, setTtaiConfigured] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadedForDomain, setLoadedForDomain] = useState<string | null>(null);
@@ -87,6 +93,9 @@ export function RecoverySettings({
           ? SHEET_SYNC_DIRECTIONS.TOP
           : SHEET_SYNC_DIRECTIONS.BOTTOM
       );
+      setCallFeedbackSheetEnabled(settings.callFeedbackSheetEnabled ?? false);
+      setCallFeedbackSheetUrl(settings.callFeedbackSheetUrl ?? "");
+      setCallFeedbackKeyColumn(settings.callFeedbackKeyColumn || "request_id");
       const mode = settings.checkoutSyncMode;
       if (
         mode === CHECKOUT_SYNC_MODES.WEBHOOK ||
@@ -134,6 +143,16 @@ export function RecoverySettings({
       });
       if (!sheet.success) {
         toast.error(sheet.error ?? "Failed to save sheet settings");
+        return;
+      }
+
+      const feedback = await updateStoreCallFeedbackSettings(storeDomain, {
+        callFeedbackSheetEnabled,
+        callFeedbackSheetUrl,
+        callFeedbackKeyColumn,
+      });
+      if (!feedback.success) {
+        toast.error(feedback.error ?? "Failed to save call feedback settings");
         return;
       }
 
@@ -242,6 +261,85 @@ export function RecoverySettings({
                 checked={autoCallsEnabled}
                 onCheckedChange={setAutoCallsEnabled}
               />
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border px-3 py-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <Label htmlFor="call-feedback-sheet">
+                    Write call feedback to Google Sheet
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    After each call, write the call status and AI feedback
+                    back to a sheet — independent of how checkouts are
+                    synced.
+                  </p>
+                </div>
+                <Switch
+                  id="call-feedback-sheet"
+                  checked={callFeedbackSheetEnabled}
+                  onCheckedChange={setCallFeedbackSheetEnabled}
+                />
+              </div>
+
+              {callFeedbackSheetEnabled && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="call-feedback-sheet-url">
+                      Feedback sheet URL
+                    </Label>
+                    <Input
+                      id="call-feedback-sheet-url"
+                      type="url"
+                      value={callFeedbackSheetUrl}
+                      onChange={(e) => setCallFeedbackSheetUrl(e.target.value)}
+                      placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Leave blank to reuse the sheet above. If you&apos;re
+                      syncing checkouts from Shopify (webhook or polling),
+                      paste a separate sheet URL here.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="call-feedback-key-column">
+                      Unique identifier column
+                    </Label>
+                    <Input
+                      id="call-feedback-key-column"
+                      value={callFeedbackKeyColumn}
+                      onChange={(e) =>
+                        setCallFeedbackKeyColumn(e.target.value)
+                      }
+                      placeholder="request_id"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The column in that sheet that uniquely identifies a
+                      row — not every checkout provider calls it{" "}
+                      <span className="font-mono">request_id</span> (that&apos;s
+                      specific to GoKwik-sourced sheets), so name it to
+                      match whatever column your sheet actually uses.
+                    </p>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    The sheet must already have these columns —{" "}
+                    <span className="font-mono">customer_name</span>,{" "}
+                    <span className="font-mono">customer_phone</span>,{" "}
+                    <span className="font-mono">email</span>,{" "}
+                    <span className="font-mono">address</span>,{" "}
+                    <span className="font-mono">city</span>,{" "}
+                    <span className="font-mono">state</span>,{" "}
+                    <span className="font-mono">pincode</span>,{" "}
+                    <span className="font-mono">product_ids</span>, and{" "}
+                    <span className="font-mono">variant_ids</span> — plus
+                    your unique identifier column, unless the sheet is
+                    completely empty (we&apos;ll create the full header row
+                    on the first write). Saving will fail with a list of
+                    missing columns otherwise. The service account used for
+                    write access must have Editor access to this sheet.
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
