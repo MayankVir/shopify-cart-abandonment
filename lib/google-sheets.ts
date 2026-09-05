@@ -146,6 +146,22 @@ export function columnIndexToA1(index0: number): string {
   return result;
 }
 
+function a1ColumnToIndex(letters: string): number {
+  let n = 0;
+  for (const char of letters.toUpperCase()) {
+    n = n * 26 + (char.charCodeAt(0) - 64);
+  }
+  return n - 1;
+}
+
+function parseA1Cell(a1: string): { columnIndex: number; row: number } | null {
+  const match = a1.trim().match(/^([A-Za-z]+)(\d+)$/);
+  if (!match) return null;
+  const row = Number(match[2]);
+  if (!Number.isFinite(row) || row < 1) return null;
+  return { columnIndex: a1ColumnToIndex(match[1]), row };
+}
+
 async function sheetsFetch<T>(
   path: string,
   init: RequestInit = {}
@@ -168,8 +184,10 @@ async function sheetsFetch<T>(
 
 async function getSheetMeta(
   spreadsheetId: string,
-  gid: string
+  gid?: string,
+  title?: string
 ): Promise<{
+  sheetId: number;
   title: string;
   rowCount: number;
   columnCount: number;
@@ -184,19 +202,69 @@ async function getSheetMeta(
     }>;
   }>(`/spreadsheets/${spreadsheetId}?fields=sheets.properties`);
 
-  const wanted = Number(gid);
+  const wantedGid = gid != null && gid !== "" ? Number(gid) : NaN;
   const match =
-    data.sheets?.find((sheet) => sheet.properties?.sheetId === wanted) ??
+    (Number.isFinite(wantedGid)
+      ? data.sheets?.find((sheet) => sheet.properties?.sheetId === wantedGid)
+      : undefined) ??
+    (title
+      ? data.sheets?.find((sheet) => sheet.properties?.title === title)
+      : undefined) ??
     data.sheets?.[0];
-  const title = match?.properties?.title;
-  if (!title) {
+  const resolvedTitle = match?.properties?.title;
+  const sheetId = match?.properties?.sheetId;
+  if (!resolvedTitle || sheetId == null) {
     throw new Error("Could not resolve the Google Sheet tab name");
   }
   return {
-    title,
+    sheetId,
+    title: resolvedTitle,
     rowCount: Math.max(1, match?.properties?.gridProperties?.rowCount ?? 1),
     columnCount: Math.max(1, match?.properties?.gridProperties?.columnCount ?? 1),
   };
+}
+
+async function ensureSheetGridFits(
+  spreadsheetId: string,
+  sheetTitle: string,
+  updates: Array<{ a1: string }>
+): Promise<void> {
+  let maxColumn = 0;
+  let maxRow = 0;
+  for (const update of updates) {
+    const cell = parseA1Cell(update.a1);
+    if (!cell) continue;
+    maxColumn = Math.max(maxColumn, cell.columnIndex + 1);
+    maxRow = Math.max(maxRow, cell.row);
+  }
+  if (maxColumn < 1 && maxRow < 1) return;
+
+  const meta = await getSheetMeta(spreadsheetId, undefined, sheetTitle);
+  const requests: Array<Record<string, unknown>> = [];
+  if (maxColumn > meta.columnCount) {
+    requests.push({
+      appendDimension: {
+        sheetId: meta.sheetId,
+        dimension: "COLUMNS",
+        length: maxColumn - meta.columnCount,
+      },
+    });
+  }
+  if (maxRow > meta.rowCount) {
+    requests.push({
+      appendDimension: {
+        sheetId: meta.sheetId,
+        dimension: "ROWS",
+        length: maxRow - meta.rowCount,
+      },
+    });
+  }
+  if (!requests.length) return;
+
+  await sheetsFetch(`/spreadsheets/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    body: JSON.stringify({ requests }),
+  });
 }
 
 export async function getSheetTitleByGid(
@@ -217,6 +285,8 @@ export async function writeSheetCells(
   updates: Array<{ a1: string; value: string }>
 ): Promise<void> {
   if (updates.length === 0) return;
+
+  await ensureSheetGridFits(spreadsheetId, sheetTitle, updates);
 
   const quoted = quoteSheetTitle(sheetTitle);
   await sheetsFetch(`/spreadsheets/${spreadsheetId}/values:batchUpdate`, {

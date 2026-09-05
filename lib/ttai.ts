@@ -509,6 +509,8 @@ export function buildSipDynamicVars(input: {
   voiceGreeting?: string;
   voiceDiscountOffer?: string;
   voiceInstructions?: string;
+  /** Only set when the repeat-customer lookup actually ran. */
+  isRepeatCustomer?: boolean;
 }): SipDynamicVars {
   const vars: SipDynamicVars = {
     order_id: input.orderId,
@@ -536,6 +538,9 @@ export function buildSipDynamicVars(input: {
   if (input.voiceGreeting) vars.greeting_script = input.voiceGreeting;
   if (input.voiceDiscountOffer) vars.discount_offer = input.voiceDiscountOffer;
   if (input.voiceInstructions) vars.agent_instructions = input.voiceInstructions;
+  if (input.isRepeatCustomer !== undefined) {
+    vars.is_repeat_customer = input.isRepeatCustomer ? "true" : "false";
+  }
 
   return vars;
 }

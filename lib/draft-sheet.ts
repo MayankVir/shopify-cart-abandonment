@@ -19,6 +19,7 @@ import {
   getDraftOrderContextForStore,
   serializeDraftOrderContext,
 } from "@/lib/shopify-draft-orders";
+import { getRepeatCustomerInfo } from "@/lib/shopify-repeat-customer";
 import { normalizeSheetShipping } from "@/lib/shipping-address";
 import type { Store } from "@prisma/client";
 
@@ -45,9 +46,12 @@ export const DRAFT_ROW_REQUIRED_FIELDS = [
 ] as const;
 
 export const DRAFT_VARIANT_COLUMNS = ["items_full_json", "variant_ids"] as const;
+export const DRAFT_REPEAT_CUSTOMER_HEADER = "Repeat Customer";
+
 export const DRAFT_OUTPUT_COLUMNS = [
   "draft_order_id",
   "draft_order_context",
+  DRAFT_REPEAT_CUSTOMER_HEADER,
 ] as const;
 
 export interface DraftSheetInspection {
@@ -69,6 +73,7 @@ export interface DraftSheetRowResult {
   message: string;
   draftOrderId?: string;
   draftOrderContext?: string;
+  isRepeatCustomer?: boolean;
   wroteToSheet: boolean;
 }
 
@@ -202,10 +207,16 @@ async function ensureOutputColumns(
   spreadsheetId: string,
   gid: string,
   headers: string[]
-): Promise<{ idIndex: number; contextIndex: number; sheetTitle: string }> {
+): Promise<{
+  idIndex: number;
+  contextIndex: number;
+  repeatIndex: number;
+  sheetTitle: string;
+}> {
   const normalized = headers.map(normalizeHeader);
   let idIndex = normalized.indexOf("draft_order_id");
   let contextIndex = normalized.indexOf("draft_order_context");
+  let repeatIndex = normalized.indexOf("repeat_customer");
   const sheetTitle = await getSheetTitleByGid(spreadsheetId, gid);
   const writes: Array<{ a1: string; value: string }> = [];
 
@@ -225,13 +236,23 @@ async function ensureOutputColumns(
       value: "draft_order_context",
     });
     headers.push("draft_order_context");
+    normalized.push("draft_order_context");
+  }
+  if (repeatIndex < 0) {
+    repeatIndex = headers.length;
+    writes.push({
+      a1: `${columnIndexToA1(repeatIndex)}1`,
+      value: DRAFT_REPEAT_CUSTOMER_HEADER,
+    });
+    headers.push(DRAFT_REPEAT_CUSTOMER_HEADER);
+    normalized.push("repeat_customer");
   }
 
   if (writes.length) {
     await writeSheetCells(spreadsheetId, sheetTitle, writes);
   }
 
-  return { idIndex, contextIndex, sheetTitle };
+  return { idIndex, contextIndex, repeatIndex, sheetTitle };
 }
 
 export async function generateDraftsForSheet(options: {
@@ -263,6 +284,7 @@ export async function generateDraftsForSheet(options: {
   let outputCols: {
     idIndex: number;
     contextIndex: number;
+    repeatIndex: number;
     sheetTitle: string;
   } | null = null;
 
@@ -331,24 +353,31 @@ export async function generateDraftsForSheet(options: {
     }
 
     try {
+      const phone = normalizePhoneNumber(record.customer_phone);
       const draft = await createDraftOrderForStore(options.store, {
         lineItems,
-        phone: normalizePhoneNumber(record.customer_phone) || undefined,
+        phone: phone || undefined,
         email: record.email?.trim() || undefined,
         checkoutToken: requestId,
         note: `Draft fill module — ${requestId}`,
         shippingAddress,
         customerName,
       });
-      const context = await getDraftOrderContextForStore(
-        options.store,
-        draft.draftOrderId
-      );
+      const [context, repeatInfo] = await Promise.all([
+        getDraftOrderContextForStore(options.store, draft.draftOrderId),
+        phone
+          ? getRepeatCustomerInfo(
+              options.store,
+              phone,
+              options.store.repeatCustomerWindowDays
+            )
+          : Promise.resolve(null),
+      ]);
       const contextJson = serializeDraftOrderContext(context);
 
       let wroteToSheet = false;
       if (outputCols) {
-        await writeSheetCells(spreadsheetId, outputCols.sheetTitle, [
+        const writes = [
           {
             a1: `${columnIndexToA1(outputCols.idIndex)}${sheetRow}`,
             value: draft.draftOrderId,
@@ -357,7 +386,14 @@ export async function generateDraftsForSheet(options: {
             a1: `${columnIndexToA1(outputCols.contextIndex)}${sheetRow}`,
             value: contextJson,
           },
-        ]);
+        ];
+        if (repeatInfo) {
+          writes.push({
+            a1: `${columnIndexToA1(outputCols.repeatIndex)}${sheetRow}`,
+            value: repeatInfo.isRepeatCustomer ? "TRUE" : "FALSE",
+          });
+        }
+        await writeSheetCells(spreadsheetId, outputCols.sheetTitle, writes);
         wroteToSheet = true;
       }
 
@@ -370,6 +406,7 @@ export async function generateDraftsForSheet(options: {
           : "Draft created (sheet write not configured)",
         draftOrderId: draft.draftOrderId,
         draftOrderContext: contextJson,
+        isRepeatCustomer: repeatInfo?.isRepeatCustomer,
         wroteToSheet,
       });
     } catch (error) {

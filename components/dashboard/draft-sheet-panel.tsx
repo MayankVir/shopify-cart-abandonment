@@ -4,33 +4,18 @@ import { useEffect, useState, useTransition } from "react";
 import { getStoreRecoverySettings } from "@/app/actions/abandoned-checkouts";
 import { FileSpreadsheet, Loader2, Play, RotateCcw, ShieldCheck } from "lucide-react";
 import {
-  generateDraftSheetBatchAction,
   inspectDraftSheetAction,
   verifyDraftSheetWriteAction,
 } from "@/app/actions/draft-sheet";
-import type { DraftSheetInspection, DraftSheetRowResult } from "@/lib/draft-sheet";
+import type { DraftSheetInspection } from "@/lib/draft-sheet";
 import type { SheetsWriteVerifyResult } from "@/lib/google-sheets";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
+import { useDraftSheetRun } from "@/store/use-draft-sheet-run";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-
-function mergeRowResults(
-  current: DraftSheetRowResult[],
-  incoming: DraftSheetRowResult[]
-): DraftSheetRowResult[] {
-  const next = [...current];
-  for (const row of incoming) {
-    const index = next.findIndex(
-      (item) => item.sheetRow === row.sheetRow && item.requestId === row.requestId
-    );
-    if (index >= 0) next[index] = row;
-    else next.push(row);
-  }
-  return next;
-}
 
 export function DraftSheetPanel() {
   const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
@@ -42,11 +27,14 @@ export function DraftSheetPanel() {
   const [verifyResult, setVerifyResult] = useState<SheetsWriteVerifyResult | null>(
     null
   );
-  const [isGenerating, setIsGenerating] = useState(false);
   const [skipExisting, setSkipExisting] = useState(true);
-  const [log, setLog] = useState<DraftSheetRowResult[]>([]);
-  const [progress, setProgress] = useState({ done: 0, total: 0 });
-  const [runError, setRunError] = useState<string | null>(null);
+
+  const isGenerating = useDraftSheetRun((s) => s.isGenerating);
+  const log = useDraftSheetRun((s) => s.log);
+  const progress = useDraftSheetRun((s) => s.progress);
+  const runError = useDraftSheetRun((s) => s.runError);
+  const runBatches = useDraftSheetRun((s) => s.runBatches);
+  const resetRun = useDraftSheetRun((s) => s.resetRun);
 
   useEffect(() => {
     if (!selectedStoreDomain) return;
@@ -60,8 +48,7 @@ export function DraftSheetPanel() {
   function handleInspect() {
     setInspectError(null);
     setInspection(null);
-    setLog([]);
-    setProgress({ done: 0, total: 0 });
+    resetRun();
     startInspect(async () => {
       const result = await inspectDraftSheetAction(sheetUrl);
       if (!result.success || !result.inspection) {
@@ -80,53 +67,11 @@ export function DraftSheetPanel() {
     });
   }
 
-  async function runBatches(options: {
-    skipExisting: boolean;
-    onlySheetRows?: number[];
-    replaceLog: boolean;
-    totalHint: number;
-  }) {
-    if (!selectedStoreDomain) return;
-    setIsGenerating(true);
-    setRunError(null);
-    if (options.replaceLog) setLog([]);
-    setProgress({ done: 0, total: options.totalHint });
-
-    let offset = 0;
-    try {
-      while (true) {
-        const batch = await generateDraftSheetBatchAction({
-          storeDomain: selectedStoreDomain,
-          sheetUrl,
-          offset,
-          limit: 3,
-          skipExisting: options.skipExisting,
-          onlySheetRows: options.onlySheetRows,
-        });
-        if (!batch.success || !batch.results) {
-          setRunError(batch.error ?? "Draft generation failed");
-          break;
-        }
-        setLog((current) =>
-          options.replaceLog
-            ? [...current, ...batch.results!]
-            : mergeRowResults(current, batch.results!)
-        );
-        setProgress({
-          done: batch.nextOffset ?? offset,
-          total: batch.total ?? options.totalHint,
-        });
-        offset = batch.nextOffset ?? offset + batch.results.length;
-        if (batch.done) break;
-      }
-    } finally {
-      setIsGenerating(false);
-    }
-  }
-
   async function handleGenerate() {
-    if (!inspection?.canGenerate) return;
+    if (!inspection?.canGenerate || !selectedStoreDomain) return;
     await runBatches({
+      storeDomain: selectedStoreDomain,
+      sheetUrl,
       skipExisting,
       replaceLog: true,
       totalHint: inspection.dataRowCount,
@@ -134,6 +79,7 @@ export function DraftSheetPanel() {
   }
 
   async function handleRetryFailed() {
+    if (!selectedStoreDomain) return;
     const failedRows = Array.from(
       new Set(
         log.filter((row) => row.status === "failed").map((row) => row.sheetRow)
@@ -141,6 +87,8 @@ export function DraftSheetPanel() {
     );
     if (!failedRows.length) return;
     await runBatches({
+      storeDomain: selectedStoreDomain,
+      sheetUrl,
       skipExisting: false,
       onlySheetRows: failedRows,
       replaceLog: false,
@@ -152,6 +100,7 @@ export function DraftSheetPanel() {
   const skipped = log.filter((row) => row.status === "skipped").length;
   const failed = log.filter((row) => row.status === "failed").length;
   const written = log.filter((row) => row.wroteToSheet).length;
+  const showRunPanel = isGenerating || log.length > 0 || Boolean(runError);
 
   if (!selectedStoreDomain) {
     return (
@@ -180,8 +129,9 @@ export function DraftSheetPanel() {
           />
           <p className="text-xs text-muted-foreground">
             This module only creates draft orders and writes{" "}
-            <code>draft_order_id</code> and <code>draft_order_context</code>{" "}
-            back. It does not call anyone.
+            <code>draft_order_id</code>, <code>draft_order_context</code>, and{" "}
+            <code>Repeat Customer</code> (TRUE/FALSE) back. It does not call
+            anyone.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -320,11 +270,15 @@ export function DraftSheetPanel() {
         </div>
       ) : null}
 
-      {isGenerating || log.length > 0 ? (
+      {showRunPanel ? (
         <div className="space-y-3 rounded-xl border border-border bg-card p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm font-medium">
-              {isGenerating ? "Generating drafts…" : "Run complete"}
+              {isGenerating
+                ? "Generating drafts…"
+                : runError
+                  ? "Run stopped"
+                  : "Run complete"}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               {failed > 0 && !isGenerating ? (
@@ -383,6 +337,11 @@ export function DraftSheetPanel() {
                   }
                 >
                   {row.status}: {row.message}
+                  {row.isRepeatCustomer != null
+                    ? ` · Repeat Customer ${
+                        row.isRepeatCustomer ? "TRUE" : "FALSE"
+                      }`
+                    : ""}
                 </span>
               </li>
             ))}

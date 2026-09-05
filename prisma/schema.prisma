@@ -110,6 +110,10 @@ model Store {
   callFeedbackSheetUrl     String      @default("") @db.Text
   /** Column name in the feedback sheet that uniquely identifies a row (not always "request_id" — depends on the checkout provider). */
   callFeedbackKeyColumn    String      @default("request_id")
+  /** When true, look up the customer's Shopify order history by phone before calling, to flag repeat customers to the agent. */
+  repeatCustomerCheckEnabled Boolean   @default(false)
+  /** Lookback window (days) for the repeat-customer order-history check. */
+  repeatCustomerWindowDays   Int       @default(180)
   /** Other *.myshopify.com hosts for the same shop (Shopify sends webhooks on any of them). */
   alternateShopDomains String[]        @default([])
   ttaiScenarioId   String?
@@ -189,6 +193,12 @@ model AbandonedCheckout {
   lastError         String?       @db.Text
   sessionId         String?
   aiSummary         String?       @db.Text
+  /** Whether the customer's phone matched a Shopify order within the lookback window at call time. Null = not checked / lookup failed. */
+  isRepeatCustomer          Boolean?
+  /** Number of matching Shopify orders found within the lookback window (dashboard only). */
+  repeatCustomerOrderCount  Int?
+  /** Most recent matching order's processedAt, if any (dashboard only). */
+  repeatCustomerLastOrderAt DateTime?
   storeDomain       String
   store             Store         @relation(fields: [storeDomain], references: [storeDomain], onDelete: Cascade)
   callAttempts      CallAttempt[]

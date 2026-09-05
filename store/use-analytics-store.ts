@@ -17,6 +17,9 @@ export interface CallLogEntry {
   recoveryUrl: string;
   draftOrderId: string;
   draftOrderName: string;
+  isRepeatCustomer: boolean | null;
+  repeatCustomerOrderCount: number | null;
+  repeatCustomerLastOrderAt: string | null;
   createdAt: string;
   updatedAt: string;
   latestAttempt: {

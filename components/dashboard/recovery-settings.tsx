@@ -15,6 +15,7 @@ import {
   getStoreRecoverySettings,
   updateStoreCallFeedbackSettings,
   updateStoreRecoverySettings,
+  updateStoreRepeatCustomerSettings,
   updateStoreSheetSettings,
 } from "@/app/actions/abandoned-checkouts";
 import { Button } from "@/components/ui/button";
@@ -61,6 +62,10 @@ export function RecoverySettings({
   const [callFeedbackSheetUrl, setCallFeedbackSheetUrl] = useState("");
   const [callFeedbackKeyColumn, setCallFeedbackKeyColumn] =
     useState("request_id");
+  const [repeatCustomerCheckEnabled, setRepeatCustomerCheckEnabled] =
+    useState(false);
+  const [repeatCustomerWindowDays, setRepeatCustomerWindowDays] =
+    useState(180);
   const [ttaiConfigured, setTtaiConfigured] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadedForDomain, setLoadedForDomain] = useState<string | null>(null);
@@ -96,6 +101,8 @@ export function RecoverySettings({
       setCallFeedbackSheetEnabled(settings.callFeedbackSheetEnabled ?? false);
       setCallFeedbackSheetUrl(settings.callFeedbackSheetUrl ?? "");
       setCallFeedbackKeyColumn(settings.callFeedbackKeyColumn || "request_id");
+      setRepeatCustomerCheckEnabled(settings.repeatCustomerCheckEnabled ?? false);
+      setRepeatCustomerWindowDays(settings.repeatCustomerWindowDays || 180);
       const mode = settings.checkoutSyncMode;
       if (
         mode === CHECKOUT_SYNC_MODES.WEBHOOK ||
@@ -153,6 +160,15 @@ export function RecoverySettings({
       });
       if (!feedback.success) {
         toast.error(feedback.error ?? "Failed to save call feedback settings");
+        return;
+      }
+
+      const repeat = await updateStoreRepeatCustomerSettings(storeDomain, {
+        repeatCustomerCheckEnabled,
+        repeatCustomerWindowDays,
+      });
+      if (!repeat.success) {
+        toast.error(repeat.error ?? "Failed to save repeat-customer settings");
         return;
       }
 
@@ -339,6 +355,52 @@ export function RecoverySettings({
                     write access must have Editor access to this sheet.
                   </p>
                 </>
+              )}
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border px-3 py-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <Label htmlFor="repeat-customer-check">
+                    Flag repeat customers to the agent
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Before each call, look up this phone in Shopify orders and
+                    pass{" "}
+                    <span className="font-mono">is_repeat_customer</span> to
+                    the agent.
+                  </p>
+                </div>
+                <Switch
+                  id="repeat-customer-check"
+                  checked={repeatCustomerCheckEnabled}
+                  onCheckedChange={setRepeatCustomerCheckEnabled}
+                />
+              </div>
+              {repeatCustomerCheckEnabled && (
+                <div className="space-y-2">
+                  <Label htmlFor="repeat-customer-window">
+                    Lookback window (days)
+                  </Label>
+                  <Input
+                    id="repeat-customer-window"
+                    type="number"
+                    min={1}
+                    max={3650}
+                    value={repeatCustomerWindowDays}
+                    onChange={(e) =>
+                      setRepeatCustomerWindowDays(Number(e.target.value))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Default 180 days (6 months). Seeing orders older than 60
+                    days requires the store&apos;s Admin API token to have{" "}
+                    <span className="font-mono">read_all_orders</span> —
+                    already granted on custom-app tokens, otherwise request it
+                    in the Shopify Partner Dashboard. Without it the check
+                    still runs but only sees the last 60 days.
+                  </p>
+                </div>
               )}
             </div>
 

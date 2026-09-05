@@ -46,6 +46,7 @@ import {
   SHEET_SYNC_PAGE_SIZE,
   syncAbandonedCheckoutsFromSheet,
 } from "@/lib/sheet-sync";
+import { clampRepeatCustomerWindowDays } from "@/lib/shopify-repeat-customer";
 
 async function guardStoreAccess(storeDomain: string): Promise<string | null> {
   try {
@@ -819,6 +820,8 @@ export async function getStoreRecoverySettings(storeDomain: string) {
       callFeedbackSheetEnabled: true,
       callFeedbackSheetUrl: true,
       callFeedbackKeyColumn: true,
+      repeatCustomerCheckEnabled: true,
+      repeatCustomerWindowDays: true,
       ttaiScenarioId: true,
       ttaiTrunkId: true,
     },
@@ -961,6 +964,41 @@ export async function updateStoreCallFeedbackSettings(
         error instanceof Error
           ? error.message
           : "Failed to save call feedback sheet settings",
+    };
+  }
+}
+
+export async function updateStoreRepeatCustomerSettings(
+  storeDomain: string,
+  input: {
+    repeatCustomerCheckEnabled: boolean;
+    repeatCustomerWindowDays: number;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
+  }
+
+  const windowDays = clampRepeatCustomerWindowDays(input.repeatCustomerWindowDays);
+
+  try {
+    await db.store.update({
+      where: { storeDomain },
+      data: {
+        repeatCustomerCheckEnabled: input.repeatCustomerCheckEnabled,
+        repeatCustomerWindowDays: windowDays,
+      },
+    });
+    revalidatePath("/dashboard/recovery");
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to save repeat-customer settings",
     };
   }
 }

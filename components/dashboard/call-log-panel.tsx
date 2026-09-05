@@ -170,6 +170,9 @@ function CallLogDetailSheet({
                 <Badge variant={STATUS_VARIANT[log.callStatus as CallStatus]}>
                   {formatCallStatus(log.callStatus as CallStatus)}
                 </Badge>
+                {log.isRepeatCustomer && (
+                  <Badge variant="secondary">Repeat customer</Badge>
+                )}
                 {log.latestAttempt?.durationSec != null && (
                   <>
                     <span>·</span>
@@ -201,6 +204,27 @@ function CallLogDetailSheet({
               {log.draftOrderId && (
                 <DetailField label="Draft order">
                   <span className="font-mono text-xs">{log.draftOrderId}</span>
+                </DetailField>
+              )}
+              {log.isRepeatCustomer != null && (
+                <DetailField label="Repeat customer">
+                  {log.isRepeatCustomer
+                    ? log.repeatCustomerOrderCount != null
+                      ? `${log.repeatCustomerOrderCount} order${
+                          log.repeatCustomerOrderCount === 1 ? "" : "s"
+                        } in window${
+                          log.repeatCustomerLastOrderAt
+                            ? ` · last ${new Date(
+                                log.repeatCustomerLastOrderAt
+                              ).toLocaleDateString([], {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              })}`
+                            : ""
+                        }`
+                      : "Yes"
+                    : "No"}
                 </DetailField>
               )}
               {log.checkoutUrl && (
@@ -374,6 +398,11 @@ function CallLogRow({
         <Badge variant={STATUS_VARIANT[log.callStatus as CallStatus]}>
           {formatCallStatus(log.callStatus as CallStatus)}
         </Badge>
+        {log.isRepeatCustomer && (
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Repeat
+          </span>
+        )}
         {hasDetails && (
           <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
             Details

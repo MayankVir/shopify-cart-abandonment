@@ -15,6 +15,7 @@ import { createStorefrontCart } from "@/lib/shopify";
 import { fetchUAgentsContext, isUAgentsConfigured } from "@/lib/uagents";
 import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
 import { buildSipDynamicVars, cancelSipCall, dispatchSipCall } from "@/lib/ttai";
+import { getRepeatCustomerInfo } from "@/lib/shopify-repeat-customer";
 import { hasBillableMinutes } from "@/lib/billing";
 import {
   parseShippingAddressFromUserContext,
@@ -321,6 +322,29 @@ export async function runRecoveryCallPipeline(
   const scenarioId = checkout.store.ttaiScenarioId ?? "";
   const sipTrunkId = checkout.store.ttaiTrunkId ?? "";
 
+  let isRepeatCustomer: boolean | undefined;
+  if (checkout.store.repeatCustomerCheckEnabled) {
+    const repeatInfo = await getRepeatCustomerInfo(
+      checkout.store,
+      phone,
+      checkout.store.repeatCustomerWindowDays
+    );
+    if (repeatInfo) {
+      isRepeatCustomer = repeatInfo.isRepeatCustomer;
+      console.log( "repeatInfo", repeatInfo);
+      await db.abandonedCheckout.update({
+        where: { id: checkout.id },
+        data: {
+          isRepeatCustomer: repeatInfo.isRepeatCustomer,
+          repeatCustomerOrderCount: repeatInfo.orderCount,
+          repeatCustomerLastOrderAt: repeatInfo.lastOrderAt
+            ? new Date(repeatInfo.lastOrderAt)
+            : null,
+        },
+      });
+    }
+  }
+
   const dynamicVars = buildSipDynamicVars({
     orderId: checkout.checkoutToken,
     phone,
@@ -338,7 +362,10 @@ export async function runRecoveryCallPipeline(
     voiceGreeting: checkout.store.voiceGreeting || undefined,
     voiceDiscountOffer: checkout.store.voiceDiscountOffer || undefined,
     voiceInstructions: checkout.store.voiceInstructions || undefined,
+    isRepeatCustomer,
   });
+
+  console.log("dynamicVars", dynamicVars);
 
   console.info(
     `[recovery] Dispatching SIP call for checkout ${checkout.id}: draftOrderId=${draftOrderId || "(none)"} phone=${phone}`
