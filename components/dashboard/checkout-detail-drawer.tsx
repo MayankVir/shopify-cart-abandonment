@@ -15,6 +15,7 @@ import {
   isActiveCall,
 } from "@/lib/call-status";
 import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
+import { sanitizeRecoveryError } from "@/lib/recovery-error";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -130,6 +131,9 @@ export function CheckoutDetailDrawer({
   const status = checkout
     ? displayCheckoutStatus(checkout.callStatus, checkout.callScheduled)
     : null;
+  const lastFailure = sanitizeRecoveryError(
+    checkout?.lastError || checkout?.latestAttempt?.failureReason,
+  );
   const title =
     checkout?.customerName ||
     (checkout?.customerPhone
@@ -154,6 +158,17 @@ export function CheckoutDetailDrawer({
 
         {checkout && status ? (
           <div className="space-y-8 px-6 py-5">
+            {lastFailure ? (
+              <section className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-3">
+                <p className="flex items-start gap-2 text-sm text-destructive">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    <span className="font-medium">Last failure. </span>
+                    {lastFailure}
+                  </span>
+                </p>
+              </section>
+            ) : null}
             <section className="space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold">Customer</h3>
@@ -286,13 +301,6 @@ export function CheckoutDetailDrawer({
               </div>
             </section>
 
-            {checkout.lastError ? (
-              <p className="flex items-start gap-2 text-sm text-destructive">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                {checkout.lastError}
-              </p>
-            ) : null}
-
             <section className="space-y-3 border-t border-border pt-6">
               <h3 className="text-sm font-semibold">Call history</h3>
               {isLoadingAttempts ? (
@@ -314,9 +322,9 @@ export function CheckoutDetailDrawer({
                       {attempt.trigger} · {formatCallStatus(attempt.status)} ·{" "}
                       {new Date(attempt.startedAt).toLocaleString()}
                     </p>
-                    {attempt.failureReason ? (
+                    {sanitizeRecoveryError(attempt.failureReason) ? (
                       <p className="text-xs text-destructive">
-                        {attempt.failureReason}
+                        {sanitizeRecoveryError(attempt.failureReason)}
                       </p>
                     ) : null}
                     <TtaiCallDetails

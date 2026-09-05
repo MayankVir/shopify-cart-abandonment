@@ -17,6 +17,8 @@ import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
 import { buildSipDynamicVars, cancelSipCall, dispatchSipCall } from "@/lib/ttai";
 import { getRepeatCustomerInfo } from "@/lib/shopify-repeat-customer";
 import { hasBillableMinutes } from "@/lib/billing";
+import { sanitizeRecoveryError } from "@/lib/recovery-error";
+import { ensureAdminTokenForUpcomingCalls } from "@/lib/shopify-admin-token";
 import {
   parseShippingAddressFromUserContext,
   type ShippingAddressFields,
@@ -64,13 +66,15 @@ async function markFailure(
 ) {
   const resetCheckout = PRE_CALL_FAILURE_STATUSES.includes(status);
 
+  const safeReason = sanitizeRecoveryError(reason);
+
   await db.$transaction([
     db.callAttempt.update({
       where: { id: attemptId },
       data: {
         status,
         failureStage: stage,
-        failureReason: reason,
+        failureReason: safeReason,
         endedAt: new Date(),
       },
     }),
@@ -78,7 +82,7 @@ async function markFailure(
       where: { id: checkoutId },
       data: {
         callStatus: resetCheckout ? CallStatus.PENDING : status,
-        lastError: reason,
+        lastError: safeReason,
         ...(status === CallStatus.DRAFT_CREATE_FAILED
           ? { draftOrderId: "", draftOrderName: "" }
           : {}),
@@ -87,13 +91,22 @@ async function markFailure(
   ]);
 }
 
+async function persistCheckoutError(checkoutId: string, reason: string) {
+  await db.abandonedCheckout.update({
+    where: { id: checkoutId },
+    data: { lastError: sanitizeRecoveryError(reason) },
+  });
+}
+
 export async function runRecoveryCallPipeline(
   checkout: AbandonedCheckout & { store: Store },
   trigger: RecoveryTrigger
 ): Promise<RecoveryPipelineResult> {
   const phone = normalizePhoneNumber(checkout.customerPhone);
   if (!phone) {
-    return { success: false, error: "No valid E.164 phone number on checkout" };
+    const error = "No valid E.164 phone number on checkout";
+    await persistCheckoutError(checkout.id, error);
+    return { success: false, error };
   }
 
   if (
@@ -110,7 +123,9 @@ export async function runRecoveryCallPipeline(
   if (checkout.store.clerkUserId) {
     const billing = await hasBillableMinutes(checkout.store.clerkUserId);
     if (!billing.allowed) {
-      return { success: false, error: billing.reason ?? "Insufficient call minutes" };
+      const error = billing.reason ?? "Insufficient call minutes";
+      await persistCheckoutError(checkout.id, error);
+      return { success: false, error };
     }
   }
 
@@ -499,6 +514,30 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
   const store = await db.store.findUnique({ where: { storeDomain } });
   if (!store?.autoCallsEnabled) return empty;
 
+  const concurrency = Math.min(10, Math.max(1, store.sipConcurrency));
+  const upcomingForToken = await db.abandonedCheckout.findMany({
+    where: {
+      storeDomain,
+      callStatus: CallStatus.PENDING,
+      callScheduled: true,
+      customerPhone: { not: "" },
+    },
+    orderBy: { scheduledCallAt: "asc" },
+    take: concurrency,
+    select: { scheduledCallAt: true },
+  });
+  const tokenPrep = await ensureAdminTokenForUpcomingCalls(
+    store,
+    upcomingForToken.map((row: { scheduledCallAt: Date | null }) => row.scheduledCallAt)
+  );
+  console.info(
+    "[process-calls] admin-token",
+    JSON.stringify({
+      storeDomain,
+      ...tokenPrep,
+    })
+  );
+
   const inFlight = await db.abandonedCheckout.count({
     where: {
       storeDomain,
@@ -506,7 +545,6 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
     },
   });
 
-  const concurrency = Math.min(10, Math.max(1, store.sipConcurrency));
   const slots = Math.max(0, concurrency - inFlight);
   if (slots === 0) return empty;
 
@@ -542,8 +580,9 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
     const failure = {
       checkoutId: checkout.id,
       checkoutToken: checkout.checkoutToken,
-      error: result.error ?? "Unknown dispatch failure",
+      error: sanitizeRecoveryError(result.error ?? "Unknown dispatch failure"),
     };
+    await persistCheckoutError(checkout.id, failure.error);
     dispatchFailures.push(failure);
     console.warn(
       "[process-calls] dispatch failed",

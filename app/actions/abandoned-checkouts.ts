@@ -39,6 +39,7 @@ import {
   isAbandonedCheckoutAccessError,
 } from "@/lib/shopify-errors";
 import {
+  ensureAdminTokenForUpcomingCalls,
   getCachedAdminTokenInfo,
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
@@ -62,6 +63,7 @@ import {
   parseCustomerNameFromUserContext,
   withCustomerName,
 } from "@/lib/user-context";
+import { sanitizeRecoveryError } from "@/lib/recovery-error";
 
 const ARCHIVED_IN_SHOPIFY_MESSAGE = "Archived in Shopify admin";
 
@@ -167,7 +169,7 @@ function toAttemptRow(
     sessionId: a.sessionId,
     status: a.status,
     failureStage: a.failureStage,
-    failureReason: a.failureReason,
+    failureReason: sanitizeRecoveryError(a.failureReason) || null,
     transcript: a.transcript,
     toolCallsJson: a.toolCallsJson,
     trigger: a.trigger,
@@ -202,7 +204,7 @@ function toRow(
     autoCallExcluded: c.autoCallExcluded,
     shopifyCreatedAt: c.shopifyCreatedAt?.toISOString() ?? null,
     callStatus: c.callStatus,
-    lastError: c.lastError,
+    lastError: sanitizeRecoveryError(c.lastError) || null,
     sessionId: c.sessionId,
     storeDomain: c.storeDomain,
     latestAttempt: latest ? toAttemptRow(latest) : null,
@@ -1241,6 +1243,31 @@ export async function runAutoCallCron(): Promise<{
   for (const store of stores) {
     const storeStartedAt = Date.now();
     let syncOk: boolean | null = null;
+
+    const concurrency = Math.min(10, Math.max(1, store.sipConcurrency));
+    const upcomingForToken = await db.abandonedCheckout.findMany({
+      where: {
+        storeDomain: store.storeDomain,
+        callStatus: CallStatus.PENDING,
+        callScheduled: true,
+        customerPhone: { not: "" },
+      },
+      orderBy: { scheduledCallAt: "asc" },
+      take: concurrency,
+      select: { scheduledCallAt: true },
+    });
+    const tokenPrep = await ensureAdminTokenForUpcomingCalls(
+      store,
+      upcomingForToken.map((row: { scheduledCallAt: Date | null }) => row.scheduledCallAt)
+    );
+    console.info(
+      "[process-calls] admin-token",
+      JSON.stringify({
+        storeDomain: store.storeDomain,
+        phase: "before-sync",
+        ...tokenPrep,
+      })
+    );
 
     if (store.checkoutSyncMode !== CheckoutSyncMode.WEBHOOK) {
       const syncResult = await syncAbandonedCheckoutsForStore(store);
