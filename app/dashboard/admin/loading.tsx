@@ -1,5 +1,5 @@
-import { AdminPageSkeleton } from "@/components/dashboard/dashboard-page-skeleton";
+import { PageSpinner } from "@/components/dashboard/page-spinner";
 
 export default function AdminLoading() {
-  return <AdminPageSkeleton />;
+  return <PageSpinner />;
 }

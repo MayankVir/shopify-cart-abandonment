@@ -2,16 +2,7 @@
 
 import { createContext, useContext, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import {
-  AdminPageSkeleton,
-  ChartCardSkeleton,
-  DraftsPageSkeleton,
-  MetricsGridSkeleton,
-  OnboardingFormSkeleton,
-  PageHeaderSkeleton,
-  RecoveryTableSkeleton,
-  TableCardSkeleton,
-} from "@/components/dashboard/dashboard-page-skeleton";
+import { PageSpinner } from "@/components/dashboard/page-spinner";
 
 interface NavPendingContextValue {
   pendingHref: string | null;
@@ -64,78 +55,13 @@ export function NavPendingProvider({
   );
 }
 
-export function DashboardRouteSkeleton({ href }: { href: string }) {
-  if (href.startsWith("/dashboard/drafts")) return <DraftsPageSkeleton />;
-  if (href.startsWith("/dashboard/admin")) return <AdminPageSkeleton />;
-  if (href.startsWith("/dashboard/recovery")) {
-    return (
-      <div className="space-y-8">
-        <PageHeaderSkeleton
-          titleClassName="h-9 w-32"
-          descriptionClassName="mt-2 h-4 w-[22rem]"
-        />
-        <RecoveryTableSkeleton />
-      </div>
-    );
-  }
-  if (href.startsWith("/dashboard/analytics")) {
-    return (
-      <div className="space-y-8">
-        <PageHeaderSkeleton />
-        <MetricsGridSkeleton />
-        <ChartCardSkeleton />
-      </div>
-    );
-  }
-  if (href.startsWith("/dashboard/billing")) {
-    return (
-      <div className="space-y-8">
-        <PageHeaderSkeleton
-          titleClassName="h-9 w-24"
-          descriptionClassName="mt-2 h-4 w-64"
-        />
-        <MetricsGridSkeleton count={2} />
-        <TableCardSkeleton rows={4} />
-      </div>
-    );
-  }
-  if (href.startsWith("/dashboard/ndrc")) {
-    return (
-      <div className="space-y-8">
-        <PageHeaderSkeleton
-          titleClassName="h-9 w-20"
-          descriptionClassName="mt-2 h-4 w-72"
-        />
-        <TableCardSkeleton rows={5} />
-      </div>
-    );
-  }
-  if (href.startsWith("/dashboard/onboarding")) {
-    return (
-      <div className="space-y-8">
-        <PageHeaderSkeleton
-          titleClassName="h-9 w-40"
-          descriptionClassName="mt-2 h-4 w-80"
-        />
-        <OnboardingFormSkeleton />
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-8">
-      <PageHeaderSkeleton />
-      <TableCardSkeleton />
-    </div>
-  );
-}
-
 export function PendingPageSlot({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { pendingHref } = useNavPending();
   const showPending = Boolean(pendingHref && pendingHref !== pathname);
 
   if (showPending && pendingHref) {
-    return <DashboardRouteSkeleton href={pendingHref} />;
+    return <PageSpinner />;
   }
 
   return <>{children}</>;

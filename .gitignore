@@ -28,6 +28,9 @@ yarn-error.log*
 # local env files
 .env*.local
 .env
+
+# database dumps (phones, tokens)
+/dumps/
 .env.prod
 google-service-account.json
 google-service-account.json.local

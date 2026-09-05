@@ -1,8 +1,10 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 import type { Store } from "@prisma/client";
 import { db } from "@/lib/db";
-import { isAdminEmail } from "@/lib/admin-gate";
+import { isCurrentUserAdmin } from "@/lib/clerk-user";
 import { normalizeStoreDomain } from "@/lib/store-domain";
+
+export { getSignedInEmail, isCurrentUserAdmin } from "@/lib/clerk-user";
 
 export class StoreAccessError extends Error {
   constructor(message: string) {
@@ -16,19 +18,6 @@ export type StoreAccessRole = "owner" | "member" | "admin";
 export async function getAuthUserId(): Promise<string | null> {
   const { userId } = await auth();
   return userId;
-}
-
-export async function getSignedInEmail(): Promise<string | null> {
-  const user = await currentUser();
-  const email =
-    user?.emailAddresses.find((e) => e.id === user.primaryEmailAddressId)
-      ?.emailAddress ?? user?.emailAddresses[0]?.emailAddress;
-  return email ? email.trim().toLowerCase() : null;
-}
-
-export async function isCurrentUserAdmin(): Promise<boolean> {
-  const email = await getSignedInEmail();
-  return isAdminEmail(email);
 }
 
 const storeDashboardSelect = {
@@ -75,11 +64,21 @@ async function userIsStoreMember(
 export async function getStoreAccessRole(
   store: Pick<Store, "id" | "clerkUserId">,
   userId: string,
-  isAdmin: boolean
+  isAdmin = false
 ): Promise<StoreAccessRole | null> {
-  if (isAdmin) return "admin";
   if (store.clerkUserId === userId) return "owner";
   if (await userIsStoreMember(store.id, userId)) return "member";
+  if (isAdmin) return "admin";
+  return null;
+}
+
+async function resolveStoreAccessRole(
+  store: Pick<Store, "id" | "clerkUserId">,
+  userId: string
+): Promise<StoreAccessRole | null> {
+  if (store.clerkUserId === userId) return "owner";
+  if (await userIsStoreMember(store.id, userId)) return "member";
+  if (await isCurrentUserAdmin()) return "admin";
   return null;
 }
 
@@ -100,8 +99,7 @@ export async function assertStoreAccess(
     throw new StoreAccessError("Store not found");
   }
 
-  const admin = await isCurrentUserAdmin();
-  const role = await getStoreAccessRole(store, userId, admin);
+  const role = await resolveStoreAccessRole(store, userId);
   if (!role) {
     throw new StoreAccessError("You do not have access to this store");
   }
@@ -124,13 +122,9 @@ export async function assertStoreOwner(storeDomain: string): Promise<Store> {
     throw new StoreAccessError("Store not found");
   }
 
-  const admin = await isCurrentUserAdmin();
-  if (admin) return store;
-  if (store.clerkUserId !== userId) {
-    throw new StoreAccessError("Only the store owner can do this");
-  }
-
-  return store;
+  if (store.clerkUserId === userId) return store;
+  if (await isCurrentUserAdmin()) return store;
+  throw new StoreAccessError("Only the store owner can do this");
 }
 
 export async function assertStoreAccessById(storeId: string): Promise<Store> {
@@ -144,8 +138,7 @@ export async function assertStoreAccessById(storeId: string): Promise<Store> {
     throw new StoreAccessError("Store not found");
   }
 
-  const admin = await isCurrentUserAdmin();
-  const role = await getStoreAccessRole(store, userId, admin);
+  const role = await resolveStoreAccessRole(store, userId);
   if (!role) {
     throw new StoreAccessError("You do not have access to this store");
   }

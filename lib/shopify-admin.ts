@@ -46,9 +46,17 @@ export interface ShopifyAbandonedCheckoutNode {
   customer: {
     email: string | null;
     phone: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    displayName: string | null;
   } | null;
-  billingAddress: { phone: string | null } | null;
-  shippingAddress: { phone: string | null } | null;
+  billingAddress: { phone: string | null; firstName?: string | null; lastName?: string | null } | null;
+  shippingAddress: {
+    phone: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+    name?: string | null;
+  } | null;
   totalPriceSet: {
     shopMoney: {
       amount: string;
@@ -105,12 +113,20 @@ const ABANDONED_CHECKOUTS_QUERY = `
         customer {
           email
           phone
+          firstName
+          lastName
+          displayName
         }
         billingAddress {
           phone
+          firstName
+          lastName
         }
         shippingAddress {
           phone
+          firstName
+          lastName
+          name
         }
         totalPriceSet {
           shopMoney {
@@ -478,6 +494,9 @@ function restCheckoutToNode(c: RestCheckoutRow): ShopifyAbandonedCheckoutNode {
     customer: {
       email: c.email ?? null,
       phone: c.phone ?? null,
+      firstName: null,
+      lastName: null,
+      displayName: null,
     },
     billingAddress: c.billing_address
       ? { phone: c.billing_address.phone ?? null }
@@ -513,6 +532,22 @@ export function checkoutTokenFromNode(node: ShopifyAbandonedCheckoutNode): strin
 export function gidToCheckoutToken(gid: string): string {
   const match = gid.match(/(\d+)$/);
   return match ? `CHECKOUT-${match[1]}` : gid.replace(/[^a-zA-Z0-9-]/g, "-");
+}
+
+export function extractCheckoutCustomerName(
+  node: ShopifyAbandonedCheckoutNode
+): string {
+  const fromCustomer = [node.customer?.firstName, node.customer?.lastName]
+    .map((part) => part?.trim() ?? "")
+    .filter(Boolean)
+    .join(" ");
+  if (fromCustomer) return fromCustomer;
+  if (node.customer?.displayName?.trim()) return node.customer.displayName.trim();
+  if (node.shippingAddress?.name?.trim()) return node.shippingAddress.name.trim();
+  return [node.shippingAddress?.firstName, node.shippingAddress?.lastName]
+    .map((part) => part?.trim() ?? "")
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function extractCheckoutPhone(node: ShopifyAbandonedCheckoutNode): string {
@@ -561,7 +596,7 @@ export function computeScheduledCallAt(
 
 /** Recompute schedule on sync; keep existing only for carts still inside their delay window. */
 export function resolveScheduledCallAt(
-  existing: { scheduledCallAt: Date | null } | null,
+  existing: { scheduledCallAt: Date | null; autoCallExcluded?: boolean } | null,
   shopifyCreatedAt: Date,
   callDelayMinutes: number,
   now: Date = new Date()
@@ -571,17 +606,22 @@ export function resolveScheduledCallAt(
   const fromAbandonment = new Date(shopifyCreatedAt.getTime() + delayMs);
   const delayWindowPassed = fromAbandonment.getTime() <= now.getTime();
 
+  if (existing?.autoCallExcluded && existing.scheduledCallAt) {
+    return existing.scheduledCallAt;
+  }
+
   if (!existing?.scheduledCallAt) {
     return computed;
   }
 
-  // Overdue carts: always recompute so old "now + delay" anchors are corrected.
-  if (delayWindowPassed) {
-    return computed;
-  }
-
+  // Keep a future time (including operator edits) so sync does not pull it forward.
   if (existing.scheduledCallAt.getTime() > now.getTime()) {
     return existing.scheduledCallAt;
+  }
+
+  // Overdue carts: recompute so old "now + delay" anchors are corrected.
+  if (delayWindowPassed) {
+    return computed;
   }
 
   return computed;

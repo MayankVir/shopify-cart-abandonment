@@ -20,6 +20,7 @@ import { assertStoreAccess, StoreAccessError } from "@/lib/store-access";
 import {
   ABANDONED_CHECKOUTS_PAGE_SIZE,
   checkoutTokenFromNode,
+  extractCheckoutCustomerName,
   extractCheckoutPhone,
   fetchGrantedAdminScopes,
   fetchShopifyAbandonedCheckouts,
@@ -41,7 +42,7 @@ import {
   getCachedAdminTokenInfo,
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
-import { canStopCall, nextCallScheduledFlag } from "@/lib/call-status";
+import { canEditSchedule, canStopCall, nextCallScheduledFlag } from "@/lib/call-status";
 import {
   SHEET_SYNC_PAGE_SIZE,
   syncAbandonedCheckoutsFromSheet,
@@ -57,6 +58,10 @@ async function guardStoreAccess(storeDomain: string): Promise<string | null> {
   }
 }
 import { formatShippingAddressFromUserContext } from "@/lib/shipping-address";
+import {
+  parseCustomerNameFromUserContext,
+  withCustomerName,
+} from "@/lib/user-context";
 
 const ARCHIVED_IN_SHOPIFY_MESSAGE = "Archived in Shopify admin";
 
@@ -97,9 +102,11 @@ export interface AbandonedCheckoutRow {
   draftOrderId: string;
   draftOrderName: string;
   recoveryUrl: string;
+  customerName: string;
   address: string;
   callScheduled: boolean;
   scheduledCallAt: string | null;
+  autoCallExcluded: boolean;
   shopifyCreatedAt: string | null;
   callStatus: CallStatus;
   lastError: string | null;
@@ -188,9 +195,11 @@ function toRow(
     draftOrderId: c.draftOrderId,
     draftOrderName: c.draftOrderName,
     recoveryUrl: c.recoveryUrl,
+    customerName: parseCustomerNameFromUserContext(c.userContext),
     address: formatShippingAddressFromUserContext(c.userContext),
     callScheduled: c.callScheduled,
     scheduledCallAt: c.scheduledCallAt?.toISOString() ?? null,
+    autoCallExcluded: c.autoCallExcluded,
     shopifyCreatedAt: c.shopifyCreatedAt?.toISOString() ?? null,
     callStatus: c.callStatus,
     lastError: c.lastError,
@@ -304,6 +313,7 @@ async function applyAutoCallEnrollment(storeDomain: string, enabled: boolean) {
         storeDomain,
         callStatus: CallStatus.PENDING,
         customerPhone: { not: "" },
+        autoCallExcluded: false,
       },
       data: { callScheduled: true },
     });
@@ -434,6 +444,7 @@ export async function syncAbandonedCheckoutsForStore(
     for (const node of shopifyNodes) {
       const checkoutToken = checkoutTokenFromNode(node);
       const phone = extractCheckoutPhone(node);
+      const shopifyName = extractCheckoutCustomerName(node);
       const cartValue = parseShopMoney(node);
       const shopifyCreatedAt = new Date(node.createdAt);
       const lineItemsJson = mapAdminLineItems(node) as unknown as Prisma.InputJsonValue;
@@ -449,6 +460,13 @@ export async function syncAbandonedCheckoutsForStore(
         shopifyCreatedAt,
         store.callDelayMinutes
       );
+      const existingName = parseCustomerNameFromUserContext(
+        existing?.userContext
+      );
+      const nextName = existingName || shopifyName;
+      const userContext = nextName
+        ? withCustomerName(existing?.userContext ?? "", nextName)
+        : existing?.userContext;
 
       if (existing) {
         const unarchivedInShopify = wasArchivedInShopify(existing);
@@ -464,6 +482,7 @@ export async function syncAbandonedCheckoutsForStore(
             lineItemsJson,
             shopifyCreatedAt,
             scheduledCallAt,
+            ...(userContext ? { userContext } : {}),
             ...(unarchivedInShopify
               ? {
                   callStatus: CallStatus.PENDING,
@@ -494,6 +513,7 @@ export async function syncAbandonedCheckoutsForStore(
             lineItemsJson,
             shopifyCreatedAt,
             scheduledCallAt,
+            ...(userContext ? { userContext } : {}),
             callScheduled: nextCallScheduledFlag(store.autoCallsEnabled, phone),
             callStatus: CallStatus.PENDING,
             storeDomain,
@@ -632,6 +652,103 @@ export async function initiateRecoveryCall(
     checkoutUrl: result.checkoutUrl,
     draftOrderId: result.draftOrderId,
   };
+}
+
+const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
+
+export async function updateCheckoutScheduleAction(
+  checkoutId: string,
+  scheduledCallAtIso: string
+): Promise<{ success: boolean; error?: string; scheduledCallAt?: string }> {
+  const checkout = await db.abandonedCheckout.findUnique({
+    where: { id: checkoutId },
+  });
+
+  if (!checkout) {
+    return { success: false, error: "Checkout not found" };
+  }
+
+  const accessError = await guardStoreAccess(checkout.storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
+  }
+
+  if (!canEditSchedule(checkout.callStatus, checkout.customerPhone)) {
+    return {
+      success: false,
+      error: checkout.callStatus !== CallStatus.PENDING
+        ? "Only pending checkouts can have their schedule changed"
+        : "A phone number is required to schedule a call",
+    };
+  }
+
+  const scheduledCallAt = new Date(scheduledCallAtIso);
+  if (Number.isNaN(scheduledCallAt.getTime())) {
+    return { success: false, error: "Enter a valid date and time" };
+  }
+
+  const now = Date.now();
+  if (scheduledCallAt.getTime() - now > MAX_SCHEDULE_AHEAD_MS) {
+    return {
+      success: false,
+      error: "Schedule time cannot be more than 30 days from now",
+    };
+  }
+
+  await db.abandonedCheckout.update({
+    where: { id: checkout.id },
+    data: {
+      scheduledCallAt,
+      callScheduled: true,
+      autoCallExcluded: false,
+    },
+  });
+
+  const store = await db.store.findUnique({
+    where: { storeDomain: checkout.storeDomain },
+    select: { autoCallsEnabled: true },
+  });
+  if (store?.autoCallsEnabled && scheduledCallAt.getTime() <= Date.now()) {
+    await dispatchDueAutoCalls(checkout.storeDomain, true);
+  }
+
+  revalidatePath("/dashboard/analytics");
+  revalidatePath("/dashboard/billing");
+  revalidatePath("/dashboard/recovery");
+
+  return { success: true, scheduledCallAt: scheduledCallAt.toISOString() };
+}
+
+export async function updateCheckoutCustomerNameAction(
+  checkoutId: string,
+  customerName: string
+): Promise<{ success: boolean; error?: string; customerName?: string }> {
+  const checkout = await db.abandonedCheckout.findUnique({
+    where: { id: checkoutId },
+  });
+
+  if (!checkout) {
+    return { success: false, error: "Checkout not found" };
+  }
+
+  const accessError = await guardStoreAccess(checkout.storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
+  }
+
+  const nextName = customerName.trim();
+  if (nextName.length > 80) {
+    return { success: false, error: "Name must be 80 characters or fewer" };
+  }
+
+  await db.abandonedCheckout.update({
+    where: { id: checkout.id },
+    data: { userContext: withCustomerName(checkout.userContext, nextName) },
+  });
+
+  revalidatePath("/dashboard/recovery");
+
+  return { success: true, customerName: nextName };
 }
 
 export async function stopRecoveryCallAction(
@@ -1122,8 +1239,12 @@ export async function runAutoCallCron(): Promise<{
   let errors = 0;
 
   for (const store of stores) {
+    const storeStartedAt = Date.now();
+    let syncOk: boolean | null = null;
+
     if (store.checkoutSyncMode !== CheckoutSyncMode.WEBHOOK) {
       const syncResult = await syncAbandonedCheckoutsForStore(store);
+      syncOk = syncResult.success;
       if (syncResult.success) synced += 1;
       else errors += 1;
     }
@@ -1131,6 +1252,18 @@ export async function runAutoCallCron(): Promise<{
     const result = await processScheduledCallsForStore(store.storeDomain);
     processed += result.processed;
     errors += result.errors;
+
+    console.info(
+      "[process-calls] store",
+      JSON.stringify({
+        storeDomain: store.storeDomain,
+        syncMode: store.checkoutSyncMode,
+        synced: syncOk,
+        dispatched: result.processed,
+        dispatchErrors: result.errors,
+        durationMs: Date.now() - storeStartedAt,
+      })
+    );
   }
 
   return { stores: stores.length, synced, processed, errors };

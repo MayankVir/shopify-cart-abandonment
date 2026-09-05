@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
+import { InlineSpinner } from "@/components/dashboard/page-spinner";
 
 function storeDisplayName(domain: string): string {
   return domain.replace(/\.myshopify\.com$/i, "") || domain;
@@ -123,7 +123,7 @@ function PendingInvitesForMe() {
   }, [load]);
 
   if (isLoading) {
-    return <Skeleton className="h-16 w-full rounded-lg" />;
+    return <InlineSpinner />;
   }
 
   if (invites.length === 0) return null;
@@ -249,10 +249,8 @@ function StoreTeamCard({ storeDomain }: { storeDomain: string }) {
   if (isLoading) {
     return (
       <Card className="border-border/60">
-        <CardContent className="space-y-3 p-6">
-          <Skeleton className="h-5 w-40" />
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
+        <CardContent className="p-6">
+          <InlineSpinner />
         </CardContent>
       </Card>
     );

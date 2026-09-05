@@ -55,6 +55,22 @@ export function formatCallStatus(status: CallStatus): string {
   return STATUS_LABELS[status] ?? status.replace(/_/g, " ");
 }
 
+export function displayCheckoutStatus(
+  status: CallStatus,
+  callScheduled: boolean
+): { label: string; variant: BadgeVariant } {
+  if (status === CallStatus.PENDING) {
+    return callScheduled
+      ? { label: "Scheduled", variant: "info" }
+      : { label: "Pending", variant: "muted" };
+  }
+
+  return {
+    label: formatCallStatus(status),
+    variant: STATUS_VARIANT[status],
+  };
+}
+
 export function isActiveCall(status: CallStatus): boolean {
   return status === CallStatus.PREPARING || status === CallStatus.DISPATCHED;
 }
@@ -70,6 +86,13 @@ export function canStopCall(status: CallStatus, callScheduled: boolean): boolean
   return isActiveCall(status) || (status === CallStatus.PENDING && callScheduled);
 }
 
+export function canEditSchedule(
+  status: CallStatus,
+  phone: string | null | undefined
+): boolean {
+  return status === CallStatus.PENDING && Boolean(phone?.trim());
+}
+
 export function shouldScheduleAutoCall(
   autoCallsEnabled: boolean,
   phone: string | null | undefined
@@ -80,8 +103,15 @@ export function shouldScheduleAutoCall(
 export function nextCallScheduledFlag(
   autoCallsEnabled: boolean,
   phone: string | null | undefined,
-  existing?: { callScheduled: boolean; callStatus: CallStatus } | null
+  existing?: {
+    callScheduled: boolean;
+    callStatus: CallStatus;
+    autoCallExcluded?: boolean;
+  } | null
 ): boolean {
+  if (existing?.autoCallExcluded) {
+    return false;
+  }
   if (existing && existing.callStatus !== CallStatus.PENDING) {
     return existing.callScheduled;
   }

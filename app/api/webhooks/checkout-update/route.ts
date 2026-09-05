@@ -13,6 +13,7 @@ import {
 import { mapWebhookLineItems } from "@/lib/line-items";
 import { isActiveCall, nextCallScheduledFlag } from "@/lib/call-status";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
+import { mergeIncomingUserContext } from "@/lib/user-context";
 import {
   findStoreForWebhook,
   getLastWebhookDebug,
@@ -238,7 +239,9 @@ export async function POST(request: NextRequest) {
         lineItemsJson: lineItems.length
           ? lineItemsJson
           : (existing.lineItemsJson as Prisma.InputJsonValue),
-        userContext: userContext || existing.userContext,
+        userContext: userContext
+          ? mergeIncomingUserContext(userContext, existing.userContext)
+          : existing.userContext,
         shopifyCreatedAt: existing.shopifyCreatedAt ?? shopifyCreatedAt,
         scheduledCallAt,
         callScheduled: nextCallScheduledFlag(

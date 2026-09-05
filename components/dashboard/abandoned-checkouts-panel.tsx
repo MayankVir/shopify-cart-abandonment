@@ -3,16 +3,14 @@
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
-  AlertCircle,
   Loader2,
-  Phone,
+  MoreHorizontal,
   PhoneOff,
   RefreshCw,
   Settings2,
 } from "lucide-react";
 import {
   getAbandonedCheckoutsForStore,
-  getCallAttemptsForCheckout,
   getStoreRecoverySettings,
   bulkStopRecoveryCallAction,
   initiateRecoveryCall,
@@ -20,15 +18,14 @@ import {
   syncAbandonedCheckouts,
   updateStoreAutoCallsEnabled,
   type AbandonedCheckoutRow,
-  type CallAttemptRow,
   type SheetPageInfo,
 } from "@/app/actions/abandoned-checkouts";
 import { formatTimeUntilCall } from "@/lib/shopify-admin";
 import {
-  STATUS_VARIANT,
+  canEditSchedule,
   canInitiateCall,
   canStopCall,
-  formatCallStatus,
+  displayCheckoutStatus,
   isActiveCall,
 } from "@/lib/call-status";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
@@ -39,7 +36,6 @@ import {
   Card,
   CardContent,
 } from "@/components/ui/card";
-import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Table,
   TableBody,
@@ -48,10 +44,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { RecoverySettings } from "@/components/dashboard/recovery-settings";
+import { CheckoutDetailDrawer } from "@/components/dashboard/checkout-detail-drawer";
+import { EditCheckoutScheduleDialog } from "@/components/dashboard/edit-checkout-schedule-dialog";
+import {
+  RecoverySettings,
+  type RecoverySettingsPatch,
+  type StoreRecoverySettings,
+} from "@/components/dashboard/recovery-settings";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { TtaiCallDetails } from "@/components/dashboard/ttai-call-details";
 import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
 import { CallStatus } from "@prisma/client";
 
@@ -63,341 +64,120 @@ function formatScheduledWhen(scheduledCallAt: string | null): string | null {
   });
 }
 
-function TimeToCallCell({
+function ScheduleCell({
   scheduledCallAt,
   callStatus,
   callScheduled,
-  lastError,
 }: {
   scheduledCallAt: string | null;
   callStatus: CallStatus;
   callScheduled: boolean;
-  lastError: string | null;
 }) {
   const [, tick] = useState(0);
 
   useEffect(() => {
-    if (callStatus !== CallStatus.PENDING) return;
+    if (callStatus !== CallStatus.PENDING || !callScheduled) return;
     const id = setInterval(() => tick((n) => n + 1), 30_000);
     return () => clearInterval(id);
-  }, [callStatus]);
+  }, [callStatus, callScheduled]);
+
+  if (callStatus !== CallStatus.PENDING || !callScheduled) {
+    return <span className="text-sm text-muted-foreground">—</span>;
+  }
 
   const when = formatScheduledWhen(scheduledCallAt);
-
-  if (callStatus === CallStatus.PREPARING) {
-    return (
-      <div className="space-y-0.5">
-        <span className="text-sm font-medium text-blue-400">Preparing call…</span>
-        {when ? <p className="text-xs text-muted-foreground">{when}</p> : null}
-      </div>
-    );
-  }
-
-  if (callStatus === CallStatus.DISPATCHED) {
-    return (
-      <div className="space-y-0.5">
-        <span className="text-sm font-medium text-blue-400">Calling now…</span>
-        {when ? <p className="text-xs text-muted-foreground">{when}</p> : null}
-      </div>
-    );
-  }
-
-  if (callStatus !== CallStatus.PENDING) {
-    return (
-      <div className="space-y-0.5">
-        <span className="text-sm text-muted-foreground">
-          {formatCallStatus(callStatus)}
-        </span>
-        {lastError ? (
-          <p className="max-w-[16rem] truncate text-xs text-destructive" title={lastError}>
-            {lastError}
-          </p>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (!callScheduled) {
-    return (
-      <div className="space-y-0.5">
-        <span className="text-sm text-muted-foreground">Not scheduled</span>
-        {when ? (
-          <p className="text-xs text-muted-foreground">Eligible {when}</p>
-        ) : null}
-      </div>
-    );
-  }
-
   const { label, isReady } = formatTimeUntilCall(
     scheduledCallAt ? new Date(scheduledCallAt) : null,
   );
 
   return (
-    <div className="space-y-0.5">
-      <span
-        className={`text-sm font-medium ${isReady ? "text-emerald-400" : "text-amber-400"}`}
+    <div className="min-w-0">
+      <p
+        className={`truncate text-sm font-medium leading-5 ${
+          isReady ? "text-emerald-400" : "text-foreground"
+        }`}
       >
-        {isReady ? "Due now" : `Scheduled in ${label}`}
-      </span>
-      {when ? <p className="text-xs text-muted-foreground">{when}</p> : null}
-    </div>
-  );
-}
-
-function CheckoutDetail({
-  checkout,
-  attempts,
-}: {
-  checkout: AbandonedCheckoutRow;
-  attempts: CallAttemptRow[];
-}) {
-  return (
-    <div className="space-y-3 rounded-md border border-border/60 bg-muted/20 p-3 text-sm">
-      {checkout.lastError && (
-        <p className="flex items-start gap-2 text-destructive">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          {checkout.lastError}
-        </p>
-      )}
-      {checkout.draftOrderId && (
-        <p>
-          <span className="text-muted-foreground">Draft order: </span>
-          <span className="font-mono text-xs">{checkout.draftOrderId}</span>
-        </p>
-      )}
-      {checkout.checkoutUrl && (
-        <p>
-          <span className="text-muted-foreground">Live cart checkout: </span>
-          <a
-            href={checkout.checkoutUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary underline-offset-4 hover:underline"
-          >
-            Open checkout
-          </a>
-        </p>
-      )}
-      {attempts.map((a) => (
-        <div key={a.id} className="space-y-2 border-t border-border/40 pt-3">
-          <p className="text-xs text-muted-foreground">
-            {a.trigger} · {formatCallStatus(a.status)} ·{" "}
-            {new Date(a.startedAt).toLocaleString()}
-          </p>
-          {a.failureReason && (
-            <p className="text-xs text-destructive">{a.failureReason}</p>
-          )}
-          <TtaiCallDetails
-            transcript={a.transcript}
-            aiSummary={undefined}
-            toolCallsJson={a.toolCallsJson}
-          />
-        </div>
-      ))}
+        {isReady ? "Due now" : label}
+      </p>
+      {when ? (
+        <p className="truncate text-xs leading-4 text-muted-foreground">{when}</p>
+      ) : null}
     </div>
   );
 }
 
 function CheckoutRow({
   checkout,
-  onRefresh,
-  onLiveRefresh,
   selectable,
   selected,
   onSelectedChange,
+  onOpenDetails,
 }: {
   checkout: AbandonedCheckoutRow;
-  onRefresh: () => void;
-  onLiveRefresh: () => void;
   selectable: boolean;
   selected: boolean;
   onSelectedChange: (selected: boolean) => void;
+  onOpenDetails: () => void;
 }) {
-  const [isPending, startTransition] = useTransition();
-  const [isStopping, startStopTransition] = useTransition();
-  const [open, setOpen] = useState(false);
-  const [attempts, setAttempts] = useState<CallAttemptRow[]>([]);
-
-  useEffect(() => {
-    if (!open) return;
-    getCallAttemptsForCheckout(checkout.id).then(setAttempts);
-  }, [open, checkout.id, checkout.callStatus]);
-
-  // The recovery pipeline writes draftOrderId to the DB well before the SIP
-  // call is dispatched, but `initiateRecoveryCall` only resolves once the
-  // whole pipeline finishes. Poll for a lightweight DB refresh while the
-  // request is in flight so the draft order shows up as soon as it's created,
-  // instead of only after the call has already been dispatched.
-  useEffect(() => {
-    if (!isPending) return;
-    const interval = setInterval(() => {
-      onLiveRefresh();
-    }, 2_000);
-    return () => clearInterval(interval);
-  }, [isPending, onLiveRefresh]);
-
-  function handleStopCall() {
-    startStopTransition(async () => {
-      const result = await stopRecoveryCallAction(checkout.id);
-      if (!result.success) {
-        toast.error(result.error ?? "Failed to stop call");
-        return;
-      }
-      toast.success(
-        isActiveCall(checkout.callStatus)
-          ? "Call stopped"
-          : "Scheduled call cancelled",
-      );
-      onRefresh();
-    });
-  }
-
-  function handleCall() {
-    startTransition(async () => {
-      const result = await initiateRecoveryCall(checkout.id);
-      if (!result.success) {
-        toast.error(result.error ?? "Failed to initiate call");
-        return;
-      }
-      toast.success(
-        result.checkoutUrl
-          ? "Call dispatched — cart checkout URL ready"
-          : "Recovery call dispatched",
-      );
-      onRefresh();
-    });
-  }
-
-  const isScheduledPending =
-    checkout.callStatus === CallStatus.PENDING && checkout.callScheduled;
-  const showCallButton =
-    canInitiateCall(checkout.callStatus) &&
-    Boolean(checkout.customerPhone) &&
-    !isScheduledPending;
-  const showStopButton = canStopCall(
+  const status = displayCheckoutStatus(
     checkout.callStatus,
     checkout.callScheduled,
   );
+  const customerLabel =
+    checkout.customerName ||
+    checkout.customerPhone ||
+    checkout.customerEmail ||
+    "customer";
 
   return (
-    <>
-      <TableRow data-state={selected ? "selected" : undefined}>
-        <TableCell>
-          <Checkbox
-            checked={selected}
-            disabled={!selectable}
-            onCheckedChange={(checked) => onSelectedChange(checked === true)}
-            aria-label={`Select checkout for ${checkout.customerPhone || checkout.customerEmail || "customer"}`}
-          />
-        </TableCell>
-        <TableCell>
-          <div className="space-y-0.5">
-            <p className="font-mono text-sm">
-              {checkout.customerPhone
-                ? formatPhoneNumber(checkout.customerPhone)
-                : "—"}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {checkout.customerEmail ?? "No email"}
-            </p>
-          </div>
-        </TableCell>
-        <TableCell className="font-medium">
-          {formatCurrency(checkout.cartValue)}
-        </TableCell>
-        <TableCell className="max-w-[220px]">
-          <p className="truncate text-sm" title={checkout.address || undefined}>
-            {checkout.address || (
-              <span className="text-muted-foreground">—</span>
+    <TableRow data-state={selected ? "selected" : undefined}>
+      <TableCell className="px-3 py-2">
+        <Checkbox
+          checked={selected}
+          disabled={!selectable}
+          onCheckedChange={(checked) => onSelectedChange(checked === true)}
+          aria-label={`Select checkout for ${customerLabel}`}
+        />
+      </TableCell>
+      <TableCell className="px-3 py-2">
+        <div className="min-w-0 max-w-[16rem]">
+          <p className="truncate text-sm font-medium leading-5">
+            {checkout.customerName || (
+              <span className="font-normal text-muted-foreground">Unnamed</span>
             )}
           </p>
-        </TableCell>
-        <TableCell>
-          <TimeToCallCell
-            scheduledCallAt={checkout.scheduledCallAt}
-            callStatus={checkout.callStatus}
-            callScheduled={checkout.callScheduled}
-            lastError={checkout.lastError}
-          />
-        </TableCell>
-        <TableCell>
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Badge variant={STATUS_VARIANT[checkout.callStatus]}>
-                {formatCallStatus(checkout.callStatus)}
-              </Badge>
-              {isScheduledPending ? (
-                <Badge variant="info">Scheduled</Badge>
-              ) : null}
-            </div>
-            {checkout.lastError ? (
-              <p
-                className="max-w-[14rem] truncate text-[11px] text-destructive"
-                title={checkout.lastError}
-              >
-                {checkout.lastError}
-              </p>
-            ) : checkout.draftOrderId ? (
-              <p
-                className="truncate font-mono text-[11px] text-muted-foreground"
-                title={checkout.draftOrderId}
-              >
-                {checkout.draftOrderId}
-              </p>
-            ) : null}
-          </div>
-        </TableCell>
-        <TableCell className="text-right">
-          <div className="flex items-center justify-end gap-2">
-            {showStopButton && (
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={handleStopCall}
-                disabled={isStopping || isPending}
-              >
-                {isStopping ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <PhoneOff className="mr-1 h-3 w-3" />
-                )}
-                {isActiveCall(checkout.callStatus)
-                  ? "Stop call"
-                  : "Cancel schedule"}
-              </Button>
-            )}
-            {showCallButton ? (
-              <Button
-                size="sm"
-                onClick={handleCall}
-                disabled={isPending || isStopping}
-              >
-                {isPending ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <Phone className="mr-1 h-3 w-3" />
-                )}
-                Call now
-              </Button>
-            ) : null}
-            <Collapsible open={open} onOpenChange={setOpen}>
-              <CollapsibleTrigger asChild>
-                <Button size="sm" variant="ghost">
-                  Details
-                </Button>
-              </CollapsibleTrigger>
-            </Collapsible>
-          </div>
-        </TableCell>
-      </TableRow>
-      {open && (
-        <TableRow>
-          <TableCell colSpan={8}>
-            <CheckoutDetail checkout={checkout} attempts={attempts} />
-          </TableCell>
-        </TableRow>
-      )}
-    </>
+          <p className="truncate font-mono text-xs leading-4 text-muted-foreground">
+            {checkout.customerPhone
+              ? formatPhoneNumber(checkout.customerPhone)
+              : "No phone"}
+          </p>
+        </div>
+      </TableCell>
+      <TableCell className="px-3 py-2 text-sm font-medium tabular-nums">
+        {formatCurrency(checkout.cartValue)}
+      </TableCell>
+      <TableCell className="px-3 py-2">
+        <ScheduleCell
+          scheduledCallAt={checkout.scheduledCallAt}
+          callStatus={checkout.callStatus}
+          callScheduled={checkout.callScheduled}
+        />
+      </TableCell>
+      <TableCell className="px-3 py-2">
+        <Badge variant={status.variant}>{status.label}</Badge>
+      </TableCell>
+      <TableCell className="px-3 py-2 text-right">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-8 w-8"
+          onClick={onOpenDetails}
+          aria-label={`Details for ${customerLabel}`}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -423,19 +203,34 @@ export function AbandonedCheckoutsPanel() {
   );
   const [isLoadingMore, startLoadMore] = useTransition();
   const [isLoadingCheckouts, setIsLoadingCheckouts] = useState(false);
+  const [hasLoadedCheckouts, setHasLoadedCheckouts] = useState(false);
+  const [recoverySettings, setRecoverySettings] =
+    useState<StoreRecoverySettings | null>(null);
+  const [settingsReady, setSettingsReady] = useState(false);
   const [autoCallsEnabled, setAutoCallsEnabled] = useState(false);
   const [isTogglingAutoCalls, startToggleAutoCalls] = useTransition();
+  const [editingCheckout, setEditingCheckout] =
+    useState<AbandonedCheckoutRow | null>(null);
+  const [detailCheckout, setDetailCheckout] =
+    useState<AbandonedCheckoutRow | null>(null);
+  const [isDetailCalling, startDetailCall] = useTransition();
+  const [isDetailStopping, startDetailStop] = useTransition();
 
-  const stoppableCheckouts = checkouts.filter((checkout) =>
+  const selectableCheckouts = checkouts.filter((checkout) =>
     canStopCall(checkout.callStatus, checkout.callScheduled),
   );
   const selectedCount = selectedIds.size;
-  const allStoppableSelected =
-    stoppableCheckouts.length > 0 &&
-    stoppableCheckouts.every((checkout) => selectedIds.has(checkout.id));
-  const someStoppableSelected =
-    stoppableCheckouts.some((checkout) => selectedIds.has(checkout.id)) &&
-    !allStoppableSelected;
+  const selectedCanRemove = checkouts.some(
+    (checkout) =>
+      selectedIds.has(checkout.id) &&
+      canStopCall(checkout.callStatus, checkout.callScheduled),
+  );
+  const allSelectableSelected =
+    selectableCheckouts.length > 0 &&
+    selectableCheckouts.every((checkout) => selectedIds.has(checkout.id));
+  const someSelectableSelected =
+    selectableCheckouts.some((checkout) => selectedIds.has(checkout.id)) &&
+    !allSelectableSelected;
   const hasActiveCalls = checkouts.some((checkout) =>
     isActiveCall(checkout.callStatus),
   );
@@ -463,6 +258,7 @@ export function AbandonedCheckoutsPanel() {
         setDbPage(result.page);
         setHasMoreDb(result.hasMore);
         setTotalCount(result.totalCount);
+        setHasLoadedCheckouts(true);
       } finally {
         if (!silent) {
           setIsLoadingCheckouts(false);
@@ -481,7 +277,18 @@ export function AbandonedCheckoutsPanel() {
     setSheetPageInfo(null);
     setCheckouts([]);
     setIsLoadingCheckouts(true);
+    setHasLoadedCheckouts(false);
+    setDetailCheckout(null);
+    setEditingCheckout(null);
   }, [selectedStoreDomain]);
+
+  useEffect(() => {
+    if (!detailCheckout) return;
+    const next = checkouts.find((checkout) => checkout.id === detailCheckout.id);
+    if (next && next !== detailCheckout) {
+      setDetailCheckout(next);
+    }
+  }, [checkouts, detailCheckout]);
 
   function toggleCheckoutSelection(checkoutId: string, selected: boolean) {
     setSelectedIds((current) => {
@@ -493,12 +300,12 @@ export function AbandonedCheckoutsPanel() {
   }
 
   function toggleSelectAllStoppable() {
-    if (allStoppableSelected) {
+    if (allSelectableSelected) {
       setSelectedIds(new Set());
       return;
     }
 
-    setSelectedIds(new Set(stoppableCheckouts.map((checkout) => checkout.id)));
+    setSelectedIds(new Set(selectableCheckouts.map((checkout) => checkout.id)));
   }
 
   const runSync = useCallback(
@@ -565,6 +372,40 @@ export function AbandonedCheckoutsPanel() {
 
   const sheetRowRangeLabel = sheetPageInfo?.rowRangeLabel ?? null;
 
+  function handleDetailCall() {
+    if (!detailCheckout) return;
+    startDetailCall(async () => {
+      const result = await initiateRecoveryCall(detailCheckout.id);
+      if (!result.success) {
+        toast.error(result.error ?? "Failed to initiate call");
+        return;
+      }
+      toast.success(
+        result.checkoutUrl
+          ? "Call dispatched — cart checkout URL ready"
+          : "Recovery call dispatched",
+      );
+      void refreshOpenCheckouts({ silent: true });
+    });
+  }
+
+  function handleDetailStop() {
+    if (!detailCheckout) return;
+    startDetailStop(async () => {
+      const result = await stopRecoveryCallAction(detailCheckout.id);
+      if (!result.success) {
+        toast.error(result.error ?? "Failed to stop call");
+        return;
+      }
+      toast.success(
+        isActiveCall(detailCheckout.callStatus)
+          ? "Call stopped"
+          : "Schedule removed",
+      );
+      void refreshOpenCheckouts({ silent: true });
+    });
+  }
+
   function handleBulkCancelSchedule() {
     if (!selectedStoreDomain || selectedCount === 0) return;
 
@@ -576,20 +417,20 @@ export function AbandonedCheckoutsPanel() {
 
       if (!result.success && result.stopped === 0) {
         toast.error(
-          result.error ?? result.errors[0] ?? "Failed to cancel schedules",
+          result.error ?? result.errors[0] ?? "Failed to remove schedules",
         );
         return;
       }
 
       if (result.failed > 0) {
         toast.warning(
-          `Cancelled ${result.stopped} schedule(s). ${result.failed} could not be updated.`,
+          `Removed ${result.stopped} schedule(s). ${result.failed} could not be updated.`,
         );
       } else {
         toast.success(
           result.stopped === 1
-            ? "Scheduled call cancelled"
-            : `Cancelled ${result.stopped} scheduled calls`,
+            ? "Schedule removed"
+            : `Removed ${result.stopped} schedules`,
         );
       }
 
@@ -604,18 +445,22 @@ export function AbandonedCheckoutsPanel() {
   }, [selectedStoreDomain, refreshOpenCheckouts]);
 
   useEffect(() => {
-    if (!selectedStoreDomain) return;
+    if (!selectedStoreDomain || !hasLoadedCheckouts) return;
 
     let active = true;
     getStoreRecoverySettings(selectedStoreDomain).then((settings) => {
-      if (!active || !settings) return;
-      setAutoCallsEnabled(settings.autoCallsEnabled);
+      if (!active) return;
+      setRecoverySettings(settings);
+      if (settings) {
+        setAutoCallsEnabled(settings.autoCallsEnabled);
+      }
+      setSettingsReady(true);
     });
 
     return () => {
       active = false;
     };
-  }, [selectedStoreDomain, showSettings]);
+  }, [selectedStoreDomain, hasLoadedCheckouts]);
 
   useEffect(() => {
     if (!selectedStoreDomain) return;
@@ -646,6 +491,13 @@ export function AbandonedCheckoutsPanel() {
     return () => clearInterval(interval);
   }, [selectedStoreDomain, autoCallsEnabled, runSync]);
 
+  function handleRecoverySettingsChange(patch: RecoverySettingsPatch) {
+    setRecoverySettings((current) =>
+      current ? { ...current, ...patch } : current,
+    );
+    setAutoCallsEnabled(patch.autoCallsEnabled);
+  }
+
   function handleAutoCallToggle(enabled: boolean) {
     if (!selectedStoreDomain || isTogglingAutoCalls) return;
     startToggleAutoCalls(async () => {
@@ -658,6 +510,9 @@ export function AbandonedCheckoutsPanel() {
         return;
       }
       setAutoCallsEnabled(enabled);
+      setRecoverySettings((current) =>
+        current ? { ...current, autoCallsEnabled: enabled } : current,
+      );
       toast.success(
         enabled
           ? "Auto-call on. Due rows will be dialed one at a time."
@@ -724,8 +579,65 @@ export function AbandonedCheckoutsPanel() {
         </div>
         <RecoverySettings
           storeDomain={selectedStoreDomain}
+          settings={recoverySettings}
+          settingsReady={settingsReady}
           open={showSettings}
           onOpenChange={setShowSettings}
+          onSettingsChange={handleRecoverySettingsChange}
+        />
+        <EditCheckoutScheduleDialog
+          checkout={editingCheckout}
+          open={editingCheckout !== null}
+          onOpenChange={(open) => {
+            if (!open) setEditingCheckout(null);
+          }}
+          onSaved={() => {
+            setSelectedIds(new Set());
+            void refreshOpenCheckouts({ silent: true });
+          }}
+        />
+        <CheckoutDetailDrawer
+          checkout={detailCheckout}
+          open={detailCheckout !== null}
+          onOpenChange={(open) => {
+            if (!open) setDetailCheckout(null);
+          }}
+          onSaved={() => {
+            void refreshOpenCheckouts({ silent: true });
+          }}
+          onEditSchedule={() => {
+            if (detailCheckout) setEditingCheckout(detailCheckout);
+          }}
+          onRemoveSchedule={handleDetailStop}
+          onCallNow={handleDetailCall}
+          canEditScheduleTime={
+            detailCheckout
+              ? canEditSchedule(
+                  detailCheckout.callStatus,
+                  detailCheckout.customerPhone,
+                )
+              : false
+          }
+          canRemoveSchedule={
+            detailCheckout
+              ? canStopCall(
+                  detailCheckout.callStatus,
+                  detailCheckout.callScheduled,
+                )
+              : false
+          }
+          canCallNow={
+            detailCheckout
+              ? canInitiateCall(detailCheckout.callStatus) &&
+                Boolean(detailCheckout.customerPhone) &&
+                !(
+                  detailCheckout.callStatus === CallStatus.PENDING &&
+                  detailCheckout.callScheduled
+                )
+              : false
+          }
+          isCalling={isDetailCalling}
+          isStopping={isDetailStopping}
         />
         {syncWarning && (
           <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs leading-relaxed text-amber-100">
@@ -760,14 +672,14 @@ export function AbandonedCheckoutsPanel() {
                   size="sm"
                   variant="destructive"
                   onClick={handleBulkCancelSchedule}
-                  disabled={isBulkStopping}
+                  disabled={isBulkStopping || !selectedCanRemove}
                 >
                   {isBulkStopping ? (
                     <Loader2 className="mr-1 h-3 w-3 animate-spin" />
                   ) : (
                     <PhoneOff className="mr-1 h-3 w-3" />
                   )}
-                  Cancel schedule
+                  Remove schedule
                 </Button>
                 <Button
                   size="sm"
@@ -781,52 +693,52 @@ export function AbandonedCheckoutsPanel() {
             )}
             <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="h-9 w-10 px-3">
                       <Checkbox
                         checked={
-                          someStoppableSelected
+                          someSelectableSelected
                             ? "indeterminate"
-                            : allStoppableSelected
+                            : allSelectableSelected
                         }
-                        disabled={stoppableCheckouts.length === 0}
+                        disabled={selectableCheckouts.length === 0}
                         onCheckedChange={toggleSelectAllStoppable}
-                        aria-label="Select all cancellable schedules"
+                        aria-label="Select all scheduled or pending checkouts"
                       />
                     </TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Value</TableHead>
-                    <TableHead>Address</TableHead>
-                    <TableHead>Schedule</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
+                    <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
+                      Customer
+                    </TableHead>
+                    <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
+                      Value
+                    </TableHead>
+                    <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
+                      Schedule
+                    </TableHead>
+                    <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
+                      Status
+                    </TableHead>
+                    <TableHead className="h-9 px-3 text-right text-[11px] uppercase tracking-wide">
+                      Actions
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {checkouts.map((checkout) => {
-                    const selectable = canStopCall(
-                      checkout.callStatus,
-                      checkout.callScheduled,
-                    );
-
-                    return (
-                      <CheckoutRow
-                        key={checkout.id}
-                        checkout={checkout}
-                        onRefresh={() => {
-                          void refreshOpenCheckouts({ silent: true });
-                        }}
-                        onLiveRefresh={() =>
-                          refreshOpenCheckouts({ silent: true })
-                        }
-                        selectable={selectable}
-                        selected={selectedIds.has(checkout.id)}
-                        onSelectedChange={(selected) =>
-                          toggleCheckoutSelection(checkout.id, selected)
-                        }
-                      />
-                    );
-                  })}
+                  {checkouts.map((checkout) => (
+                    <CheckoutRow
+                      key={checkout.id}
+                      checkout={checkout}
+                      selectable={canStopCall(
+                        checkout.callStatus,
+                        checkout.callScheduled,
+                      )}
+                      selected={selectedIds.has(checkout.id)}
+                      onSelectedChange={(selected) =>
+                        toggleCheckoutSelection(checkout.id, selected)
+                      }
+                      onOpenDetails={() => setDetailCheckout(checkout)}
+                    />
+                  ))}
                 </TableBody>
               </Table>
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3">

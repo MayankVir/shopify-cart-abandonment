@@ -37,7 +37,7 @@ export function AnalyticsPageContent() {
   const { data, isLoading, selectedStoreDomain } = useStoreAnalytics(dateRange);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-4">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
@@ -53,9 +53,6 @@ export function AnalyticsPageContent() {
       {selectedStoreDomain ? (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={data.source === "ttai" ? "success" : "secondary"}>
-              {data.source === "ttai" ? "TTAI unified analytics" : "Local DB"}
-            </Badge>
             {data.scenarioName && (
               <span className="text-sm text-muted-foreground">
                 Scenario: {data.scenarioName}

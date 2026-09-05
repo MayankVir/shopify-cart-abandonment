@@ -1,5 +1,6 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
+import { getSignedInEmail } from "@/lib/clerk-user";
 
 function getAdminEmails(): string[] {
   const raw = process.env.ADMIN_EMAILS ?? "";
@@ -25,12 +26,7 @@ export async function requireAdmin(): Promise<{
     redirect("/sign-in");
   }
 
-  const user = await currentUser();
-  const email =
-    user?.emailAddresses.find((e) => e.id === user.primaryEmailAddressId)
-      ?.emailAddress ??
-    user?.emailAddresses[0]?.emailAddress ??
-    null;
+  const email = await getSignedInEmail();
 
   if (!isAdminEmail(email)) {
     redirect("/dashboard/analytics?error=unauthorized");

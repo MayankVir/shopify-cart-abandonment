@@ -30,6 +30,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -38,16 +39,54 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+export type StoreRecoverySettings = NonNullable<
+  Awaited<ReturnType<typeof getStoreRecoverySettings>>
+>;
+
+export type RecoverySettingsPatch = Pick<
+  StoreRecoverySettings,
+  | "callDelayMinutes"
+  | "sipConcurrency"
+  | "autoCallsEnabled"
+  | "checkoutSyncMode"
+  | "sheetUrl"
+  | "sheetSyncDirection"
+  | "callFeedbackSheetEnabled"
+  | "callFeedbackSheetUrl"
+  | "callFeedbackKeyColumn"
+  | "repeatCustomerCheckEnabled"
+  | "repeatCustomerWindowDays"
+>;
+
 interface RecoverySettingsProps {
   storeDomain: string;
+  settings: StoreRecoverySettings | null;
+  settingsReady: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSettingsChange?: (patch: RecoverySettingsPatch) => void;
+}
+
+function syncModeFromSettings(
+  mode: StoreRecoverySettings["checkoutSyncMode"]
+): CheckoutSyncModeValue {
+  if (
+    mode === CHECKOUT_SYNC_MODES.WEBHOOK ||
+    mode === CHECKOUT_SYNC_MODES.POLLING ||
+    mode === CHECKOUT_SYNC_MODES.SHEET
+  ) {
+    return mode;
+  }
+  return CHECKOUT_SYNC_MODES.POLLING;
 }
 
 export function RecoverySettings({
   storeDomain,
+  settings,
+  settingsReady,
   open,
   onOpenChange,
+  onSettingsChange,
 }: RecoverySettingsProps) {
   const [callDelayMinutes, setCallDelayMinutes] = useState(30);
   const [sipConcurrency, setSipConcurrency] = useState(1);
@@ -66,68 +105,30 @@ export function RecoverySettings({
     useState(false);
   const [repeatCustomerWindowDays, setRepeatCustomerWindowDays] =
     useState(180);
-  const [ttaiConfigured, setTtaiConfigured] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadedForDomain, setLoadedForDomain] = useState<string | null>(null);
   const [isPending, startSave] = useTransition();
+  const ttaiConfigured = Boolean(
+    settings?.ttaiScenarioId && settings?.ttaiTrunkId
+  );
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !settings) return;
 
-    if (loadedForDomain === storeDomain) {
-      setIsLoading(false);
-      return;
-    }
-
-    let active = true;
-    setIsLoading(true);
-
-    getStoreRecoverySettings(storeDomain).then((settings) => {
-      if (!active) return;
-      if (!settings) {
-        setIsLoading(false);
-        return;
-      }
-
-      setCallDelayMinutes(settings.callDelayMinutes);
-      setSipConcurrency(settings.sipConcurrency);
-      setAutoCallsEnabled(settings.autoCallsEnabled);
-      setSheetUrl(settings.sheetUrl ?? "");
-      setSheetSyncDirection(
-        settings.sheetSyncDirection === "TOP"
-          ? SHEET_SYNC_DIRECTIONS.TOP
-          : SHEET_SYNC_DIRECTIONS.BOTTOM
-      );
-      setCallFeedbackSheetEnabled(settings.callFeedbackSheetEnabled ?? false);
-      setCallFeedbackSheetUrl(settings.callFeedbackSheetUrl ?? "");
-      setCallFeedbackKeyColumn(settings.callFeedbackKeyColumn || "request_id");
-      setRepeatCustomerCheckEnabled(settings.repeatCustomerCheckEnabled ?? false);
-      setRepeatCustomerWindowDays(settings.repeatCustomerWindowDays || 180);
-      const mode = settings.checkoutSyncMode;
-      if (
-        mode === CHECKOUT_SYNC_MODES.WEBHOOK ||
-        mode === CHECKOUT_SYNC_MODES.POLLING ||
-        mode === CHECKOUT_SYNC_MODES.SHEET
-      ) {
-        setCheckoutSyncMode(mode);
-      }
-      setTtaiConfigured(
-        Boolean(settings.ttaiScenarioId && settings.ttaiTrunkId)
-      );
-      setLoadedForDomain(storeDomain);
-      setIsLoading(false);
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [open, storeDomain, loadedForDomain]);
-
-  useEffect(() => {
-    if (loadedForDomain && loadedForDomain !== storeDomain) {
-      setLoadedForDomain(null);
-    }
-  }, [storeDomain, loadedForDomain]);
+    setCallDelayMinutes(settings.callDelayMinutes);
+    setSipConcurrency(settings.sipConcurrency);
+    setAutoCallsEnabled(settings.autoCallsEnabled);
+    setSheetUrl(settings.sheetUrl ?? "");
+    setSheetSyncDirection(
+      settings.sheetSyncDirection === "TOP"
+        ? SHEET_SYNC_DIRECTIONS.TOP
+        : SHEET_SYNC_DIRECTIONS.BOTTOM
+    );
+    setCallFeedbackSheetEnabled(settings.callFeedbackSheetEnabled ?? false);
+    setCallFeedbackSheetUrl(settings.callFeedbackSheetUrl ?? "");
+    setCallFeedbackKeyColumn(settings.callFeedbackKeyColumn || "request_id");
+    setRepeatCustomerCheckEnabled(settings.repeatCustomerCheckEnabled ?? false);
+    setRepeatCustomerWindowDays(settings.repeatCustomerWindowDays || 180);
+    setCheckoutSyncMode(syncModeFromSettings(settings.checkoutSyncMode));
+  }, [open, settings]);
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -172,218 +173,194 @@ export function RecoverySettings({
         return;
       }
 
+      onSettingsChange?.({
+        callDelayMinutes,
+        sipConcurrency,
+        autoCallsEnabled,
+        checkoutSyncMode,
+        sheetUrl,
+        sheetSyncDirection,
+        callFeedbackSheetEnabled,
+        callFeedbackSheetUrl,
+        callFeedbackKeyColumn,
+        repeatCustomerCheckEnabled,
+        repeatCustomerWindowDays,
+      });
+
       toast.success("Settings saved");
       onOpenChange(false);
     });
   }
 
+  const showLoading = open && !settingsReady;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Checkout recovery settings</DialogTitle>
-          <DialogDescription>
-            Configure how abandoned checkouts are synced and when auto-calls are
-            dispatched. Auto-call keeps running after you close this tab.
+      <DialogContent className="gap-0 overflow-visible p-0 sm:max-w-xl">
+        <DialogHeader className="border-b border-border px-5 py-3 pr-12">
+          <DialogTitle>Checkout recovery</DialogTitle>
+          <DialogDescription className="sr-only">
+            Source, calling, and optional follow-up for this store.
           </DialogDescription>
         </DialogHeader>
 
-        {isLoading ? (
+        {showLoading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading settings…
           </div>
         ) : (
-          <form id="recovery-settings-form" onSubmit={handleSave} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="checkout-sync-mode">Checkout data source</Label>
-              <Select
-                value={checkoutSyncMode}
-                onValueChange={(value) =>
-                  setCheckoutSyncMode(value as CheckoutSyncModeValue)
-                }
+          <form
+            id="recovery-settings-form"
+            onSubmit={handleSave}
+            className="space-y-3 px-5 py-4"
+          >
+            <SettingsPanel title="Source">
+              <Field
+                className="col-span-2"
+                label="Checkout source"
+                htmlFor="checkout-sync-mode"
               >
-                <SelectTrigger id="checkout-sync-mode">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={CHECKOUT_SYNC_MODES.SHEET}>
-                    Google Sheet (plugin)
-                  </SelectItem>
-                  <SelectItem value={CHECKOUT_SYNC_MODES.POLLING}>
-                    Shopify Admin API poll
-                  </SelectItem>
-                  <SelectItem value={CHECKOUT_SYNC_MODES.WEBHOOK}>
-                    Shopify webhook
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+                <Select
+                  value={checkoutSyncMode}
+                  onValueChange={(value) =>
+                    setCheckoutSyncMode(value as CheckoutSyncModeValue)
+                  }
+                >
+                  <SelectTrigger id="checkout-sync-mode" className="h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={CHECKOUT_SYNC_MODES.SHEET}>
+                      Google Sheet (plugin)
+                    </SelectItem>
+                    <SelectItem value={CHECKOUT_SYNC_MODES.POLLING}>
+                      Shopify Admin API poll
+                    </SelectItem>
+                    <SelectItem value={CHECKOUT_SYNC_MODES.WEBHOOK}>
+                      Shopify webhook
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
 
-            {checkoutSyncMode === CHECKOUT_SYNC_MODES.SHEET && (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="sheet-url">Abandoned checkout sheet URL</Label>
-                  <Input
-                    id="sheet-url"
-                    type="url"
-                    value={sheetUrl}
-                    onChange={(e) => setSheetUrl(e.target.value)}
-                    placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Public Google Sheet — shared as &quot;Anyone with the link&quot;
-                    or published to web as CSV.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="sheet-sync-direction">Sheet sync order</Label>
-                  <Select
-                    value={sheetSyncDirection}
-                    onValueChange={(value) =>
-                      setSheetSyncDirection(value as SheetSyncDirectionValue)
-                    }
-                  >
-                    <SelectTrigger id="sheet-sync-direction">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={SHEET_SYNC_DIRECTIONS.BOTTOM}>
-                        Newest first (from bottom of sheet)
-                      </SelectItem>
-                      <SelectItem value={SHEET_SYNC_DIRECTIONS.TOP}>
-                        Oldest first (from top of sheet)
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Sync now pulls 10 rows at a time. Newest first matches
-                    webhook rows appended at the bottom of your sheet.
-                  </p>
-                </div>
-              </>
-            )}
+              {checkoutSyncMode === CHECKOUT_SYNC_MODES.SHEET && (
+                <>
+                  <Field label="Sheet URL" htmlFor="sheet-url">
+                    <Input
+                      id="sheet-url"
+                      className="h-8"
+                      type="url"
+                      value={sheetUrl}
+                      onChange={(e) => setSheetUrl(e.target.value)}
+                      placeholder="https://docs.google.com/spreadsheets/d/…"
+                    />
+                  </Field>
+                  <Field label="Read order" htmlFor="sheet-sync-direction">
+                    <Select
+                      value={sheetSyncDirection}
+                      onValueChange={(value) =>
+                        setSheetSyncDirection(value as SheetSyncDirectionValue)
+                      }
+                    >
+                      <SelectTrigger id="sheet-sync-direction" className="h-8">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={SHEET_SYNC_DIRECTIONS.BOTTOM}>
+                          Newest first
+                        </SelectItem>
+                        <SelectItem value={SHEET_SYNC_DIRECTIONS.TOP}>
+                          Oldest first
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </>
+              )}
+            </SettingsPanel>
 
-            <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-3">
-              <div className="space-y-1">
-                <Label htmlFor="auto-calls">Automated calling</Label>
-                <p className="text-xs text-muted-foreground">
-                  Sync and dial due rows every 5 minutes, even if the dashboard
-                  is closed.
-                </p>
-              </div>
-              <Switch
+            <SettingsPanel title="Calling">
+              <ToggleRow
                 id="auto-calls"
+                label="Automated calling"
                 checked={autoCallsEnabled}
                 onCheckedChange={setAutoCallsEnabled}
               />
-            </div>
-
-            <div className="space-y-3 rounded-lg border border-border px-3 py-3">
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <Label htmlFor="call-feedback-sheet">
-                    Write call feedback to Google Sheet
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    After each call, write the call status and AI feedback
-                    back to a sheet — independent of how checkouts are
-                    synced.
-                  </p>
-                </div>
-                <Switch
-                  id="call-feedback-sheet"
-                  checked={callFeedbackSheetEnabled}
-                  onCheckedChange={setCallFeedbackSheetEnabled}
+              <Field label="Delay (min)" htmlFor="call-delay">
+                <Input
+                  id="call-delay"
+                  className="h-8"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={callDelayMinutes}
+                  onChange={(e) => setCallDelayMinutes(Number(e.target.value))}
                 />
-              </div>
+              </Field>
+              <Field label="Live calls" htmlFor="sip-concurrency">
+                <Input
+                  id="sip-concurrency"
+                  className="h-8"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={sipConcurrency}
+                  onChange={(e) => setSipConcurrency(Number(e.target.value))}
+                />
+              </Field>
+            </SettingsPanel>
 
+            <SettingsPanel title="Optional">
+              <ToggleRow
+                id="call-feedback-sheet"
+                label="Write feedback to sheet"
+                checked={callFeedbackSheetEnabled}
+                onCheckedChange={setCallFeedbackSheetEnabled}
+              />
               {callFeedbackSheetEnabled && (
                 <>
-                  <div className="space-y-2">
-                    <Label htmlFor="call-feedback-sheet-url">
-                      Feedback sheet URL
-                    </Label>
+                  <Field
+                    label="Feedback sheet"
+                    htmlFor="call-feedback-sheet-url"
+                  >
                     <Input
                       id="call-feedback-sheet-url"
+                      className="h-8"
                       type="url"
                       value={callFeedbackSheetUrl}
-                      onChange={(e) => setCallFeedbackSheetUrl(e.target.value)}
-                      placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0"
+                      onChange={(e) =>
+                        setCallFeedbackSheetUrl(e.target.value)
+                      }
+                      placeholder="Reuse checkout sheet if blank"
                     />
-                    <p className="text-xs text-muted-foreground">
-                      Leave blank to reuse the sheet above. If you&apos;re
-                      syncing checkouts from Shopify (webhook or polling),
-                      paste a separate sheet URL here.
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="call-feedback-key-column">
-                      Unique identifier column
-                    </Label>
+                  </Field>
+                  <Field
+                    label="Key column"
+                    htmlFor="call-feedback-key-column"
+                  >
                     <Input
                       id="call-feedback-key-column"
+                      className="h-8"
                       value={callFeedbackKeyColumn}
                       onChange={(e) =>
                         setCallFeedbackKeyColumn(e.target.value)
                       }
                       placeholder="request_id"
                     />
-                    <p className="text-xs text-muted-foreground">
-                      The column in that sheet that uniquely identifies a
-                      row — not every checkout provider calls it{" "}
-                      <span className="font-mono">request_id</span> (that&apos;s
-                      specific to GoKwik-sourced sheets), so name it to
-                      match whatever column your sheet actually uses.
-                    </p>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    The sheet must already have these columns —{" "}
-                    <span className="font-mono">customer_name</span>,{" "}
-                    <span className="font-mono">customer_phone</span>,{" "}
-                    <span className="font-mono">email</span>,{" "}
-                    <span className="font-mono">address</span>,{" "}
-                    <span className="font-mono">city</span>,{" "}
-                    <span className="font-mono">state</span>,{" "}
-                    <span className="font-mono">pincode</span>,{" "}
-                    <span className="font-mono">product_ids</span>, and{" "}
-                    <span className="font-mono">variant_ids</span> — plus
-                    your unique identifier column, unless the sheet is
-                    completely empty (we&apos;ll create the full header row
-                    on the first write). Saving will fail with a list of
-                    missing columns otherwise. The service account used for
-                    write access must have Editor access to this sheet.
-                  </p>
+                  </Field>
                 </>
               )}
-            </div>
-
-            <div className="space-y-3 rounded-lg border border-border px-3 py-3">
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <Label htmlFor="repeat-customer-check">
-                    Flag repeat customers to the agent
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Before each call, look up this phone in Shopify orders and
-                    pass{" "}
-                    <span className="font-mono">is_repeat_customer</span> to
-                    the agent.
-                  </p>
-                </div>
-                <Switch
-                  id="repeat-customer-check"
-                  checked={repeatCustomerCheckEnabled}
-                  onCheckedChange={setRepeatCustomerCheckEnabled}
-                />
-              </div>
-              {repeatCustomerCheckEnabled && (
-                <div className="space-y-2">
-                  <Label htmlFor="repeat-customer-window">
-                    Lookback window (days)
-                  </Label>
+              <ToggleRow
+                id="repeat-customer-check"
+                label="Flag repeat customers"
+                checked={repeatCustomerCheckEnabled}
+                onCheckedChange={setRepeatCustomerCheckEnabled}
+              >
+                {repeatCustomerCheckEnabled ? (
                   <Input
                     id="repeat-customer-window"
+                    className="h-8 w-20"
                     type="number"
                     min={1}
                     max={3650}
@@ -391,63 +368,26 @@ export function RecoverySettings({
                     onChange={(e) =>
                       setRepeatCustomerWindowDays(Number(e.target.value))
                     }
+                    aria-label="Lookback days"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Default 180 days (6 months). Seeing orders older than 60
-                    days requires the store&apos;s Admin API token to have{" "}
-                    <span className="font-mono">read_all_orders</span> —
-                    already granted on custom-app tokens, otherwise request it
-                    in the Shopify Partner Dashboard. Without it the check
-                    still runs but only sees the last 60 days.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="call-delay">Delay after cart entry (minutes)</Label>
-                <Input
-                  id="call-delay"
-                  type="number"
-                  min={1}
-                  max={1440}
-                  value={callDelayMinutes}
-                  onChange={(e) => setCallDelayMinutes(Number(e.target.value))}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Counted from the time on the sheet or Shopify row. Default 30.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="sip-concurrency">SIP concurrency</Label>
-                <Input
-                  id="sip-concurrency"
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={sipConcurrency}
-                  onChange={(e) => setSipConcurrency(Number(e.target.value))}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Starts at 1. Only that many live calls at once.
-                </p>
-              </div>
-            </div>
+                ) : null}
+              </ToggleRow>
+            </SettingsPanel>
 
             {!ttaiConfigured && (
-              <p className="text-xs text-amber-400">
-                TTAI scenario/trunk not set for this store — configure in Admin
-                panel.
+              <p className="text-xs text-amber-800 dark:text-amber-200">
+                TTAI scenario and trunk are not set. Configure them in Admin
+                before dispatching calls.
               </p>
             )}
           </form>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="border-t border-border px-5 py-3">
           <Button
             type="button"
             variant="outline"
+            size="sm"
             onClick={() => onOpenChange(false)}
             disabled={isPending}
           >
@@ -455,8 +395,9 @@ export function RecoverySettings({
           </Button>
           <Button
             type="submit"
+            size="sm"
             form="recovery-settings-form"
-            disabled={isPending || isLoading}
+            disabled={isPending || showLoading}
           >
             {isPending ? (
               <>
@@ -470,5 +411,69 @@ export function RecoverySettings({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function SettingsPanel({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-border">
+      <h3 className="border-b border-border bg-muted/50 px-3 py-2 text-sm font-semibold">
+        {title}
+      </h3>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 p-3">{children}</div>
+    </section>
+  );
+}
+
+function Field({
+  label,
+  htmlFor,
+  className,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("space-y-1", className)}>
+      <Label htmlFor={htmlFor} className="text-xs font-medium text-muted-foreground">
+        {label}
+      </Label>
+      {children}
+    </div>
+  );
+}
+
+function ToggleRow({
+  id,
+  label,
+  checked,
+  onCheckedChange,
+  children,
+}: {
+  id: string;
+  label: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="col-span-2 flex h-9 items-center justify-between gap-3 rounded-md bg-muted/40 px-2.5">
+      <Label htmlFor={id} className="text-sm font-medium">
+        {label}
+      </Label>
+      <div className="flex items-center gap-2">
+        {children}
+        <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+      </div>
+    </div>
   );
 }

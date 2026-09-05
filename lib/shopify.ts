@@ -156,9 +156,23 @@ export interface CheckoutWebhookPayload {
   created_at?: string;
   updated_at?: string;
   completed_at?: string | null;
-  customer?: { email?: string | null };
-  billing_address?: { phone?: string | null } | null;
-  shipping_address?: { phone?: string | null } | null;
+  customer?: {
+    email?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+  };
+  billing_address?: {
+    phone?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    name?: string | null;
+  } | null;
+  shipping_address?: {
+    phone?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    name?: string | null;
+  } | null;
   line_items?: Array<{
     variant_id?: number;
     variantId?: number;
@@ -203,6 +217,21 @@ export function extractCartValue(payload: CheckoutWebhookPayload): number {
   return Number.isFinite(total) ? total : 0;
 }
 
+function customerNameFromWebhook(payload: CheckoutWebhookPayload): string {
+  const fromCustomer = [payload.customer?.first_name, payload.customer?.last_name]
+    .map((part) => part?.trim() ?? "")
+    .filter(Boolean)
+    .join(" ");
+  if (fromCustomer) return fromCustomer;
+
+  const address = payload.shipping_address ?? payload.billing_address;
+  if (address?.name?.trim()) return address.name.trim();
+  return [address?.first_name, address?.last_name]
+    .map((part) => part?.trim() ?? "")
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function buildWebhookUserContext(
   payload: CheckoutWebhookPayload,
   phone: string,
@@ -214,6 +243,7 @@ export function buildWebhookUserContext(
     checkout_token: payload.token || "",
     cart_token: payload.cart_token || "",
     abandoned_checkout_url: payload.abandoned_checkout_url || "",
+    customer_name: customerNameFromWebhook(payload),
     email,
     phone,
     currency: payload.currency || "",

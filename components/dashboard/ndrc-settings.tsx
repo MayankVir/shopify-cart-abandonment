@@ -19,60 +19,46 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+export type StoreNdrcSettings = NonNullable<
+  Awaited<ReturnType<typeof getStoreNdrcSettings>>
+>;
+
+export type NdrcSettingsPatch = Pick<
+  StoreNdrcSettings,
+  "ndrcSheetUrl" | "ndrcMinAttempts"
+>;
+
 interface NdrcSettingsProps {
   storeDomain: string;
+  settings: StoreNdrcSettings | null;
+  settingsReady: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSettingsChange?: (patch: NdrcSettingsPatch) => void;
 }
 
-export function NdrcSettings({ storeDomain, open, onOpenChange }: NdrcSettingsProps) {
+export function NdrcSettings({
+  storeDomain,
+  settings,
+  settingsReady,
+  open,
+  onOpenChange,
+  onSettingsChange,
+}: NdrcSettingsProps) {
   const [sheetUrl, setSheetUrl] = useState("");
   const [minAttempts, setMinAttempts] = useState(1);
-  const [ttaiConfigured, setTtaiConfigured] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadedForDomain, setLoadedForDomain] = useState<string | null>(null);
   const [isPending, startSave] = useTransition();
+  const ttaiConfigured = Boolean(
+    (settings?.ndrcTtaiScenarioId || settings?.ttaiScenarioId) &&
+      (settings?.ndrcTtaiTrunkId || settings?.ttaiTrunkId)
+  );
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !settings) return;
 
-    if (loadedForDomain === storeDomain) {
-      setIsLoading(false);
-      return;
-    }
-
-    let active = true;
-    setIsLoading(true);
-
-    getStoreNdrcSettings(storeDomain).then((settings) => {
-      if (!active) return;
-      if (!settings) {
-        setIsLoading(false);
-        return;
-      }
-
-      setSheetUrl(settings.ndrcSheetUrl ?? "");
-      setMinAttempts(settings.ndrcMinAttempts ?? 1);
-      setTtaiConfigured(
-        Boolean(
-          (settings.ndrcTtaiScenarioId || settings.ttaiScenarioId) &&
-            (settings.ndrcTtaiTrunkId || settings.ttaiTrunkId)
-        )
-      );
-      setLoadedForDomain(storeDomain);
-      setIsLoading(false);
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [open, storeDomain, loadedForDomain]);
-
-  useEffect(() => {
-    if (loadedForDomain && loadedForDomain !== storeDomain) {
-      setLoadedForDomain(null);
-    }
-  }, [storeDomain, loadedForDomain]);
+    setSheetUrl(settings.ndrcSheetUrl ?? "");
+    setMinAttempts(settings.ndrcMinAttempts ?? 1);
+  }, [open, settings]);
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -86,76 +72,93 @@ export function NdrcSettings({ storeDomain, open, onOpenChange }: NdrcSettingsPr
         return;
       }
 
+      onSettingsChange?.({
+        ndrcSheetUrl: sheetUrl,
+        ndrcMinAttempts: minAttempts,
+      });
       toast.success("Settings saved");
       onOpenChange(false);
     });
   }
 
+  const showLoading = open && !settingsReady;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="gap-0 overflow-visible p-0 sm:max-w-xl">
+        <DialogHeader className="border-b border-border px-5 py-3 pr-12">
           <DialogTitle>NDRC settings</DialogTitle>
-          <DialogDescription>
-            Configure the sheet of non-delivered orders to sync, and the
-            minimum number of failed delivery attempts before an order shows
-            up here.
+          <DialogDescription className="sr-only">
+            Which sheet to sync, and how many failed deliveries qualify an order.
           </DialogDescription>
         </DialogHeader>
 
-        {isLoading ? (
+        {showLoading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading settings…
           </div>
         ) : (
-          <form id="ndrc-settings-form" onSubmit={handleSave} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="ndrc-sheet-url">NDRC orders sheet URL</Label>
-              <Input
-                id="ndrc-sheet-url"
-                type="url"
-                value={sheetUrl}
-                onChange={(e) => setSheetUrl(e.target.value)}
-                placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0"
-              />
-              <p className="text-xs text-muted-foreground">
-                Public Google Sheet — shared as &quot;Anyone with the
-                link&quot; or published to web as CSV. Expected columns
-                include order id, phone, attempts, and address / pincode /
-                state / country.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="ndrc-min-attempts">Minimum delivery attempts</Label>
-              <Input
-                id="ndrc-min-attempts"
-                type="number"
-                min={1}
-                max={20}
-                value={minAttempts}
-                onChange={(e) => setMinAttempts(Number(e.target.value))}
-              />
-              <p className="text-xs text-muted-foreground">
-                Only rows where the delivery has been attempted at least this
-                many times are synced. Defaults to 1.
-              </p>
-            </div>
+          <form
+            id="ndrc-settings-form"
+            onSubmit={handleSave}
+            className="space-y-3 px-5 py-4"
+          >
+            <section className="overflow-hidden rounded-lg border border-border">
+              <h3 className="border-b border-border bg-muted/50 px-3 py-2 text-sm font-semibold">
+                Orders
+              </h3>
+              <div className="grid grid-cols-[1fr_7.5rem] gap-3 p-3">
+                <div className="space-y-1">
+                  <Label
+                    htmlFor="ndrc-sheet-url"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
+                    Sheet URL
+                  </Label>
+                  <Input
+                    id="ndrc-sheet-url"
+                    className="h-8"
+                    type="url"
+                    value={sheetUrl}
+                    onChange={(e) => setSheetUrl(e.target.value)}
+                    placeholder="https://docs.google.com/spreadsheets/d/…"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label
+                    htmlFor="ndrc-min-attempts"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
+                    Min attempts
+                  </Label>
+                  <Input
+                    id="ndrc-min-attempts"
+                    className="h-8"
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={minAttempts}
+                    onChange={(e) => setMinAttempts(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+            </section>
 
             {!ttaiConfigured && (
-              <p className="text-xs text-amber-400">
-                TTAI scenario/trunk not set for NDRC — configure it in the
-                Admin panel before dispatching calls.
+              <p className="text-xs text-amber-800 dark:text-amber-200">
+                TTAI scenario and trunk are not set. Configure them in Admin
+                before dispatching calls.
               </p>
             )}
           </form>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="border-t border-border px-5 py-3">
           <Button
             type="button"
             variant="outline"
+            size="sm"
             onClick={() => onOpenChange(false)}
             disabled={isPending}
           >
@@ -163,8 +166,9 @@ export function NdrcSettings({ storeDomain, open, onOpenChange }: NdrcSettingsPr
           </Button>
           <Button
             type="submit"
+            size="sm"
             form="ndrc-settings-form"
-            disabled={isPending || isLoading}
+            disabled={isPending || showLoading}
           >
             {isPending ? (
               <>

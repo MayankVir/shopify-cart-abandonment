@@ -27,12 +27,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMinutes } from "@/lib/analytics";
-import {
-  ChartCardSkeleton,
-  MetricsGridSkeleton,
-  TableCardSkeleton,
-} from "@/components/dashboard/dashboard-page-skeleton";
-import { Skeleton } from "@/components/ui/skeleton";
+import { InlineSpinner } from "@/components/dashboard/page-spinner";
 
 const PRESET_AMOUNTS = [10, 30, 50, 100];
 
@@ -253,11 +248,6 @@ export function BillingPanel() {
 
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-wrap gap-2">
-          <Badge variant={data.source === "ttai" ? "success" : "secondary"}>
-            {data.source === "ttai"
-              ? "TTAI unified analytics"
-              : "Local DB fallback"}
-          </Badge>
           <Badge variant="outline">
             Account balance: {creditBalance.toFixed(2)} min
           </Badge>
@@ -266,7 +256,7 @@ export function BillingPanel() {
       </div>
 
       {isLoadingUsage && data.summary.totalCalls === 0 ? (
-        <MetricsGridSkeleton count={4} />
+        <InlineSpinner />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Card>
@@ -282,7 +272,7 @@ export function BillingPanel() {
                   {creditBalance.toFixed(2)}
                 </div>
               ) : (
-                <Skeleton className="h-9 w-24" />
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               )}
               <p className="mt-1 text-xs text-muted-foreground">
                 Shared across all your stores
@@ -340,7 +330,7 @@ export function BillingPanel() {
       )}
 
       {isLoadingBilling && !billing?.recentTopUps?.length ? (
-        <TableCardSkeleton rows={3} />
+        <InlineSpinner />
       ) : billing?.recentTopUps?.length ? (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2">
@@ -390,7 +380,7 @@ export function BillingPanel() {
       ) : null}
 
       {isLoadingUsage && data.timeSeries.length === 0 ? (
-        <ChartCardSkeleton />
+        <InlineSpinner />
       ) : (
         <TtaiTimeSeriesPanel
           points={data.timeSeries}

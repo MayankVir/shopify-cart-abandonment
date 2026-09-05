@@ -1,5 +1,5 @@
-import { DraftsPageSkeleton } from "@/components/dashboard/dashboard-page-skeleton";
+import { PageSpinner } from "@/components/dashboard/page-spinner";
 
 export default function DraftsLoading() {
-  return <DraftsPageSkeleton />;
+  return <PageSpinner />;
 }

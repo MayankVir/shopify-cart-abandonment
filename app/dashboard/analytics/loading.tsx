@@ -1,9 +1,5 @@
-import { Loader2 } from "lucide-react";
+import { PageSpinner } from "@/components/dashboard/page-spinner";
 
 export default function AnalyticsLoading() {
-  return (
-    <div className="flex min-h-[min(60vh,32rem)] items-center justify-center">
-      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-    </div>
-  );
+  return <PageSpinner />;
 }

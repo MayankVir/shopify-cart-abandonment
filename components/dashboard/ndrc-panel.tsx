@@ -13,6 +13,7 @@ import {
 import {
   getNdrcCallAttempts,
   getNdrcOrdersForStore,
+  getStoreNdrcSettings,
   initiateNdrcCall,
   stopNdrcCallAction,
   syncNdrcOrders,
@@ -39,7 +40,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { NdrcSettings } from "@/components/dashboard/ndrc-settings";
+import {
+  NdrcSettings,
+  type NdrcSettingsPatch,
+  type StoreNdrcSettings,
+} from "@/components/dashboard/ndrc-settings";
 import { TtaiCallDetails } from "@/components/dashboard/ttai-call-details";
 import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
 
@@ -232,6 +237,11 @@ export function NdrcPanel() {
   const [totalCount, setTotalCount] = useState(0);
   const [isLoadingMore, startLoadMore] = useTransition();
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
+  const [hasLoadedOrders, setHasLoadedOrders] = useState(false);
+  const [ndrcSettings, setNdrcSettings] = useState<StoreNdrcSettings | null>(
+    null
+  );
+  const [settingsReady, setSettingsReady] = useState(false);
 
   const refreshOrders = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
@@ -248,7 +258,10 @@ export function NdrcPanel() {
         setHasMore(result.hasMore);
         setTotalCount(result.totalCount);
       } finally {
-        if (!silent) setIsLoadingOrders(false);
+        if (!silent) {
+          setIsLoadingOrders(false);
+          setHasLoadedOrders(true);
+        }
       }
     },
     [selectedStoreDomain]
@@ -260,6 +273,9 @@ export function NdrcPanel() {
     setTotalCount(0);
     setOrders([]);
     setIsLoadingOrders(true);
+    setHasLoadedOrders(false);
+    setNdrcSettings(null);
+    setSettingsReady(false);
   }, [selectedStoreDomain]);
 
   const runSync = useCallback(() => {
@@ -307,6 +323,27 @@ export function NdrcPanel() {
     void refreshOrders();
   }, [selectedStoreDomain, refreshOrders]);
 
+  useEffect(() => {
+    if (!selectedStoreDomain || !hasLoadedOrders) return;
+
+    let active = true;
+    getStoreNdrcSettings(selectedStoreDomain).then((settings) => {
+      if (!active) return;
+      setNdrcSettings(settings);
+      setSettingsReady(true);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedStoreDomain, hasLoadedOrders]);
+
+  function handleNdrcSettingsChange(patch: NdrcSettingsPatch) {
+    setNdrcSettings((current) =>
+      current ? { ...current, ...patch } : current
+    );
+  }
+
   const hasActiveCalls = orders.some((order) => isActiveCall(order.callStatus));
 
   useEffect(() => {
@@ -347,8 +384,11 @@ export function NdrcPanel() {
         </div>
         <NdrcSettings
           storeDomain={selectedStoreDomain}
+          settings={ndrcSettings}
+          settingsReady={settingsReady}
           open={showSettings}
           onOpenChange={setShowSettings}
+          onSettingsChange={handleNdrcSettingsChange}
         />
         {syncWarning && (
           <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs leading-relaxed text-amber-100">

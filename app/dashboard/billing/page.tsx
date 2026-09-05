@@ -1,9 +1,6 @@
 import { Suspense } from "react";
 import { BillingPanel } from "@/components/dashboard/billing-panel";
-import {
-  ChartCardSkeleton,
-  MetricsGridSkeleton,
-} from "@/components/dashboard/dashboard-page-skeleton";
+import { PageSpinner } from "@/components/dashboard/page-spinner";
 
 export default function BillingPage() {
   return (
@@ -15,14 +12,7 @@ export default function BillingPage() {
         </p>
       </div>
 
-      <Suspense
-        fallback={
-          <div className="space-y-6">
-            <MetricsGridSkeleton count={4} />
-            <ChartCardSkeleton />
-          </div>
-        }
-      >
+      <Suspense fallback={<PageSpinner />}>
         <BillingPanel />
       </Suspense>
     </div>

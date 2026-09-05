@@ -11,6 +11,7 @@ import {
 import { normalizePhoneNumber } from "@/lib/phone";
 import { nextCallScheduledFlag } from "@/lib/call-status";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
+import { mergeIncomingUserContext } from "@/lib/user-context";
 import { parseSheetUrl, sheetGvizRangeUrl } from "@/lib/sheet-url";
 import {
   SHEET_SYNC_DIRECTIONS,
@@ -710,13 +711,16 @@ export async function syncAbandonedCheckoutsFromSheet(
     );
 
     const lineItemsJson = row.lineItems as unknown as Prisma.InputJsonValue;
-    const userContext = JSON.stringify({
-      source: "gokwik_sheet",
-      drop_off_stage: row.dropOffStage,
-      customer_name: row.customerName,
-      cart_items_summary: row.cartItemsSummary,
-      shipping_address: row.shippingAddress,
-    });
+    const userContext = mergeIncomingUserContext(
+      JSON.stringify({
+        source: "gokwik_sheet",
+        drop_off_stage: row.dropOffStage,
+        customer_name: row.customerName,
+        cart_items_summary: row.cartItemsSummary,
+        shipping_address: row.shippingAddress,
+      }),
+      existing?.userContext
+    );
 
     const shouldClearDraft =
       Boolean(existing) &&

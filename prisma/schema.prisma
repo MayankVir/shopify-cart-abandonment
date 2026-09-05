@@ -188,6 +188,8 @@ model AbandonedCheckout {
   relatedItems      Json          @default("[]")
   callScheduled     Boolean       @default(false)
   scheduledCallAt   DateTime?
+  /** When true, sync and auto-call enrollment will not re-schedule this row. */
+  autoCallExcluded  Boolean       @default(false)
   shopifyCreatedAt  DateTime?
   callStatus        CallStatus    @default(PENDING)
   lastError         String?       @db.Text

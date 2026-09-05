@@ -1,9 +1,9 @@
-import { currentUser } from "@clerk/nextjs/server";
 import { getStoresForDashboard } from "@/app/actions/store";
 import { getMerchantBillingSummary } from "@/app/actions/billing";
 import { getPendingInviteCountForMe } from "@/app/actions/store-team";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import { isAdminEmail } from "@/lib/admin-gate";
+import { getAuthState, getSignedInEmail } from "@/lib/clerk-user";
 import { buildSidebarAccountSummary } from "@/lib/sidebar-account";
 
 export default async function DashboardLayout({
@@ -11,14 +11,12 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const user = await currentUser();
-  const email =
-    user?.emailAddresses.find((e) => e.id === user.primaryEmailAddressId)
-      ?.emailAddress ?? user?.emailAddresses[0]?.emailAddress;
+  const { userId } = await getAuthState();
+  const email = userId ? await getSignedInEmail() : null;
   const stores = await getStoresForDashboard();
-  const pendingInviteCount = user ? await getPendingInviteCountForMe() : 0;
+  const pendingInviteCount = userId ? await getPendingInviteCountForMe() : 0;
 
-  const billing = user ? await getMerchantBillingSummary() : null;
+  const billing = userId ? await getMerchantBillingSummary() : null;
   const account = billing
     ? buildSidebarAccountSummary({
         creditBalanceMinutes: billing.creditBalanceMinutes,

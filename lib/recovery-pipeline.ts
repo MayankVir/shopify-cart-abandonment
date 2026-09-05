@@ -427,7 +427,7 @@ export async function stopRecoveryCall(
   ) {
     await db.abandonedCheckout.update({
       where: { id: checkout.id },
-      data: { callScheduled: false },
+      data: { callScheduled: false, autoCallExcluded: true },
     });
     return { success: true };
   }
