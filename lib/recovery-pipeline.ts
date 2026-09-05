@@ -489,9 +489,15 @@ export async function stopRecoveryCall(
 export async function processScheduledCallsForStore(storeDomain: string): Promise<{
   processed: number;
   errors: number;
+  dispatchFailures: Array<{
+    checkoutId: string;
+    checkoutToken: string;
+    error: string;
+  }>;
 }> {
+  const empty = { processed: 0, errors: 0, dispatchFailures: [] };
   const store = await db.store.findUnique({ where: { storeDomain } });
-  if (!store?.autoCallsEnabled) return { processed: 0, errors: 0 };
+  if (!store?.autoCallsEnabled) return empty;
 
   const inFlight = await db.abandonedCheckout.count({
     where: {
@@ -502,7 +508,7 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
 
   const concurrency = Math.min(10, Math.max(1, store.sipConcurrency));
   const slots = Math.max(0, concurrency - inFlight);
-  if (slots === 0) return { processed: 0, errors: 0 };
+  if (slots === 0) return empty;
 
   const due = await db.abandonedCheckout.findMany({
     where: {
@@ -519,12 +525,34 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
 
   let processed = 0;
   let errors = 0;
+  const dispatchFailures: Array<{
+    checkoutId: string;
+    checkoutToken: string;
+    error: string;
+  }> = [];
 
   for (const checkout of due) {
     const result = await runRecoveryCallPipeline(checkout, "auto");
-    if (result.success) processed++;
-    else errors++;
+    if (result.success) {
+      processed++;
+      continue;
+    }
+
+    errors++;
+    const failure = {
+      checkoutId: checkout.id,
+      checkoutToken: checkout.checkoutToken,
+      error: result.error ?? "Unknown dispatch failure",
+    };
+    dispatchFailures.push(failure);
+    console.warn(
+      "[process-calls] dispatch failed",
+      JSON.stringify({
+        storeDomain,
+        ...failure,
+      })
+    );
   }
 
-  return { processed, errors };
+  return { processed, errors, dispatchFailures };
 }

@@ -1261,6 +1261,7 @@ export async function runAutoCallCron(): Promise<{
         synced: syncOk,
         dispatched: result.processed,
         dispatchErrors: result.errors,
+        dispatchFailures: result.dispatchFailures,
         durationMs: Date.now() - storeStartedAt,
       })
     );
