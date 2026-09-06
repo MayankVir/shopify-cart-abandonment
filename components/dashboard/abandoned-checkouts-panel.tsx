@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   Loader2,
   MoreHorizontal,
+  Phone,
   PhoneOff,
   RefreshCw,
   Settings2,
@@ -110,15 +111,20 @@ function CheckoutRow({
   checkout,
   selectable,
   selected,
+  autoCallsEnabled,
   onSelectedChange,
   onOpenDetails,
+  onRefresh,
 }: {
   checkout: AbandonedCheckoutRow;
   selectable: boolean;
   selected: boolean;
+  autoCallsEnabled: boolean;
   onSelectedChange: (selected: boolean) => void;
   onOpenDetails: () => void;
+  onRefresh: () => void;
 }) {
+  const [isCalling, startCall] = useTransition();
   const status = displayCheckoutStatus(
     checkout.callStatus,
     checkout.callScheduled,
@@ -128,6 +134,26 @@ function CheckoutRow({
     checkout.customerPhone ||
     checkout.customerEmail ||
     "customer";
+  const showRowCall =
+    !autoCallsEnabled &&
+    canInitiateCall(checkout.callStatus) &&
+    Boolean(checkout.customerPhone);
+
+  function handleCallNow() {
+    startCall(async () => {
+      const result = await initiateRecoveryCall(checkout.id);
+      if (!result.success) {
+        toast.error(result.error ?? "Failed to initiate call");
+        return;
+      }
+      toast.success(
+        result.checkoutUrl
+          ? "Call dispatched — cart checkout URL ready"
+          : "Recovery call dispatched",
+      );
+      onRefresh();
+    });
+  }
 
   return (
     <TableRow data-state={selected ? "selected" : undefined}>
@@ -167,15 +193,32 @@ function CheckoutRow({
         <Badge variant={status.variant}>{status.label}</Badge>
       </TableCell>
       <TableCell className="px-3 py-2 text-right">
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-8 w-8"
-          onClick={onOpenDetails}
-          aria-label={`Details for ${customerLabel}`}
-        >
-          <MoreHorizontal className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center justify-end gap-1">
+          {showRowCall ? (
+            <Button
+              size="sm"
+              className="h-8"
+              onClick={handleCallNow}
+              disabled={isCalling}
+            >
+              {isCalling ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Phone className="h-3.5 w-3.5" />
+              )}
+              Call now
+            </Button>
+          ) : null}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8"
+            onClick={onOpenDetails}
+            aria-label={`Details for ${customerLabel}`}
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </div>
       </TableCell>
     </TableRow>
   );
@@ -628,7 +671,8 @@ export function AbandonedCheckoutsPanel() {
           }
           canCallNow={
             detailCheckout
-              ? canInitiateCall(detailCheckout.callStatus) &&
+              ? autoCallsEnabled &&
+                canInitiateCall(detailCheckout.callStatus) &&
                 Boolean(detailCheckout.customerPhone) &&
                 !(
                   detailCheckout.callStatus === CallStatus.PENDING &&
@@ -733,10 +777,14 @@ export function AbandonedCheckoutsPanel() {
                         checkout.callScheduled,
                       )}
                       selected={selectedIds.has(checkout.id)}
+                      autoCallsEnabled={autoCallsEnabled}
                       onSelectedChange={(selected) =>
                         toggleCheckoutSelection(checkout.id, selected)
                       }
                       onOpenDetails={() => setDetailCheckout(checkout)}
+                      onRefresh={() => {
+                        void refreshOpenCheckouts({ silent: true });
+                      }}
                     />
                   ))}
                 </TableBody>

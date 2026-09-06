@@ -9,10 +9,12 @@ import {
   type AbandonedCheckoutRow,
   type CallAttemptRow,
 } from "@/app/actions/abandoned-checkouts";
+import { formatDuration } from "@/lib/analytics";
 import {
   displayCheckoutStatus,
   formatCallStatus,
   isActiveCall,
+  STATUS_VARIANT,
 } from "@/lib/call-status";
 import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
 import { sanitizeRecoveryError } from "@/lib/recovery-error";
@@ -43,6 +45,71 @@ function DetailField({
       </p>
       <div className="text-sm leading-relaxed text-foreground">{children}</div>
     </div>
+  );
+}
+
+function attemptHasCallDetails(attempt: CallAttemptRow): boolean {
+  if (attempt.transcript?.trim()) return true;
+  if (attempt.sessionId || attempt.callId) return true;
+  if (attempt.toolCallsJson == null) return false;
+  if (
+    typeof attempt.toolCallsJson === "object" &&
+    !Array.isArray(attempt.toolCallsJson)
+  ) {
+    return Object.keys(attempt.toolCallsJson as object).length > 0;
+  }
+  return Boolean(attempt.toolCallsJson);
+}
+
+function CallAttemptHistoryRow({ attempt }: { attempt: CallAttemptRow }) {
+  const failure = sanitizeRecoveryError(attempt.failureReason);
+  const hasDetails = attemptHasCallDetails(attempt);
+  const startedAt = new Date(attempt.startedAt).toLocaleString([], {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+
+  return (
+    <li className="border-b border-border/60 py-2 last:border-b-0">
+      <div className="flex items-center gap-2">
+        <Badge
+          variant={STATUS_VARIANT[attempt.status]}
+          className="h-5 shrink-0 px-1.5 text-[10px] font-medium"
+        >
+          {formatCallStatus(attempt.status)}
+        </Badge>
+        <p className="min-w-0 truncate text-xs text-muted-foreground">
+          <span className="capitalize">{attempt.trigger}</span>
+          <span className="text-border"> · </span>
+          {startedAt}
+          {attempt.durationSec != null && attempt.durationSec > 0 ? (
+            <>
+              <span className="text-border"> · </span>
+              {formatDuration(attempt.durationSec)}
+            </>
+          ) : null}
+        </p>
+      </div>
+      {failure ? (
+        <p className="mt-1 line-clamp-2 text-xs leading-snug text-destructive">
+          {failure}
+        </p>
+      ) : null}
+      {hasDetails ? (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+            Call details
+          </summary>
+          <div className="mt-2">
+            <TtaiCallDetails
+              transcript={attempt.transcript}
+              aiSummary={undefined}
+              toolCallsJson={attempt.toolCallsJson}
+            />
+          </div>
+        </details>
+      ) : null}
+    </li>
   );
 }
 
@@ -242,6 +309,27 @@ export function CheckoutDetailDrawer({
                   {checkout.draftOrderId || "—"}
                 </DetailField>
               </div>
+              <DetailField label="Products">
+                {checkout.lineItems.length === 0 ? (
+                  "—"
+                ) : (
+                  <ul className="space-y-1">
+                    {checkout.lineItems.map((item, index) => (
+                      <li
+                        key={`${item.title}-${index}`}
+                        className="flex items-baseline justify-between gap-3"
+                      >
+                        <span className="min-w-0 truncate">
+                          {item.title || "Untitled product"}
+                        </span>
+                        <span className="shrink-0 tabular-nums text-muted-foreground">
+                          ×{item.quantity}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </DetailField>
               {checkout.checkoutUrl ? (
                 <a
                   href={checkout.checkoutUrl}
@@ -301,39 +389,30 @@ export function CheckoutDetailDrawer({
               </div>
             </section>
 
-            <section className="space-y-3 border-t border-border pt-6">
-              <h3 className="text-sm font-semibold">Call history</h3>
+            <section className="space-y-2 border-t border-border pt-6">
+              <h3 className="text-sm font-semibold">
+                Call history
+                {attempts.length > 0 ? (
+                  <span className="ml-1.5 font-normal text-muted-foreground">
+                    {attempts.length}
+                  </span>
+                ) : null}
+              </h3>
               {isLoadingAttempts ? (
-                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <p className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   Loading attempts…
                 </p>
               ) : attempts.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   No call attempts yet.
                 </p>
               ) : (
-                attempts.map((attempt) => (
-                  <div
-                    key={attempt.id}
-                    className="space-y-2 rounded-md border border-border/70 p-3"
-                  >
-                    <p className="text-xs text-muted-foreground">
-                      {attempt.trigger} · {formatCallStatus(attempt.status)} ·{" "}
-                      {new Date(attempt.startedAt).toLocaleString()}
-                    </p>
-                    {sanitizeRecoveryError(attempt.failureReason) ? (
-                      <p className="text-xs text-destructive">
-                        {sanitizeRecoveryError(attempt.failureReason)}
-                      </p>
-                    ) : null}
-                    <TtaiCallDetails
-                      transcript={attempt.transcript}
-                      aiSummary={undefined}
-                      toolCallsJson={attempt.toolCallsJson}
-                    />
-                  </div>
-                ))
+                <ul>
+                  {attempts.map((attempt) => (
+                    <CallAttemptHistoryRow key={attempt.id} attempt={attempt} />
+                  ))}
+                </ul>
               )}
             </section>
           </div>

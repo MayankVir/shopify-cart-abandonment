@@ -44,6 +44,7 @@ import {
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
 import { canEditSchedule, canStopCall, nextCallScheduledFlag } from "@/lib/call-status";
+import { parseLineItems } from "@/lib/line-items";
 import {
   SHEET_SYNC_PAGE_SIZE,
   syncAbandonedCheckoutsFromSheet,
@@ -115,6 +116,7 @@ export interface AbandonedCheckoutRow {
   sessionId: string | null;
   storeDomain: string;
   latestAttempt: CallAttemptRow | null;
+  lineItems: Array<{ title: string; quantity: number }>;
 }
 
 export interface SyncResult {
@@ -208,6 +210,10 @@ function toRow(
     sessionId: c.sessionId,
     storeDomain: c.storeDomain,
     latestAttempt: latest ? toAttemptRow(latest) : null,
+    lineItems: parseLineItems(c.lineItemsJson).map((item) => ({
+      title: item.title,
+      quantity: item.quantity,
+    })),
   };
 }
 

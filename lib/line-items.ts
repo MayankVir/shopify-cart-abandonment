@@ -41,6 +41,25 @@ export function mapWebhookLineItems(
   });
 }
 
+export function parseLineItems(json: unknown): LineItemRecord[] {
+  if (!Array.isArray(json)) return [];
+  return json.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Partial<LineItemRecord>;
+    const quantity = Number(row.quantity);
+    return [
+      {
+        variant_id: String(row.variant_id ?? ""),
+        variant_gid: String(row.variant_gid ?? ""),
+        product_id: row.product_id ? String(row.product_id) : undefined,
+        title: typeof row.title === "string" ? row.title.trim() : "",
+        quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+        price: typeof row.price === "string" ? row.price : undefined,
+      },
+    ];
+  });
+}
+
 export function lineItemsHaveVariantId(items: LineItemRecord[]): boolean {
   return items.some((item) => item.variant_gid);
 }
