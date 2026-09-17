@@ -32,6 +32,13 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
+  COMMON_IANA_TIMEZONES,
+  DEFAULT_CALL_WINDOW_END_MINUTE,
+  DEFAULT_CALL_WINDOW_START_MINUTE,
+  minutesToTimeInput,
+  timeInputToMinutes,
+} from "@/lib/call-window";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -56,6 +63,10 @@ export type RecoverySettingsPatch = Pick<
   | "callFeedbackKeyColumn"
   | "repeatCustomerCheckEnabled"
   | "repeatCustomerWindowDays"
+  | "callWindowEnabled"
+  | "callWindowStartMinute"
+  | "callWindowEndMinute"
+  | "ianaTimezoneOverride"
 >;
 
 interface RecoverySettingsProps {
@@ -105,6 +116,14 @@ export function RecoverySettings({
     useState(false);
   const [repeatCustomerWindowDays, setRepeatCustomerWindowDays] =
     useState(180);
+  const [callWindowEnabled, setCallWindowEnabled] = useState(true);
+  const [windowStart, setWindowStart] = useState(
+    minutesToTimeInput(DEFAULT_CALL_WINDOW_START_MINUTE)
+  );
+  const [windowEnd, setWindowEnd] = useState(
+    minutesToTimeInput(DEFAULT_CALL_WINDOW_END_MINUTE)
+  );
+  const [timezoneOverride, setTimezoneOverride] = useState("shopify");
   const [isPending, startSave] = useTransition();
   const ttaiConfigured = Boolean(
     settings?.ttaiScenarioId && settings?.ttaiTrunkId
@@ -128,6 +147,18 @@ export function RecoverySettings({
     setRepeatCustomerCheckEnabled(settings.repeatCustomerCheckEnabled ?? false);
     setRepeatCustomerWindowDays(settings.repeatCustomerWindowDays || 180);
     setCheckoutSyncMode(syncModeFromSettings(settings.checkoutSyncMode));
+    setCallWindowEnabled(settings.callWindowEnabled ?? true);
+    setWindowStart(
+      minutesToTimeInput(
+        settings.callWindowStartMinute ?? DEFAULT_CALL_WINDOW_START_MINUTE
+      )
+    );
+    setWindowEnd(
+      minutesToTimeInput(
+        settings.callWindowEndMinute ?? DEFAULT_CALL_WINDOW_END_MINUTE
+      )
+    );
+    setTimezoneOverride(settings.ianaTimezoneOverride?.trim() || "shopify");
   }, [open, settings]);
 
   function handleSave(e: React.FormEvent) {
@@ -137,7 +168,20 @@ export function RecoverySettings({
         storeDomain,
         callDelayMinutes,
         sipConcurrency,
-        autoCallsEnabled
+        autoCallsEnabled,
+        {
+          callWindowEnabled,
+          callWindowStartMinute: timeInputToMinutes(
+            windowStart,
+            DEFAULT_CALL_WINDOW_START_MINUTE
+          ),
+          callWindowEndMinute: timeInputToMinutes(
+            windowEnd,
+            DEFAULT_CALL_WINDOW_END_MINUTE
+          ),
+          ianaTimezoneOverride:
+            timezoneOverride === "shopify" ? "" : timezoneOverride,
+        }
       );
       if (!recovery.success) {
         toast.error(recovery.error ?? "Failed to save recovery settings");
@@ -185,6 +229,17 @@ export function RecoverySettings({
         callFeedbackKeyColumn,
         repeatCustomerCheckEnabled,
         repeatCustomerWindowDays,
+        callWindowEnabled,
+        callWindowStartMinute: timeInputToMinutes(
+          windowStart,
+          DEFAULT_CALL_WINDOW_START_MINUTE
+        ),
+        callWindowEndMinute: timeInputToMinutes(
+          windowEnd,
+          DEFAULT_CALL_WINDOW_END_MINUTE
+        ),
+        ianaTimezoneOverride:
+          timezoneOverride === "shopify" ? "" : timezoneOverride,
       });
 
       toast.success("Settings saved");
@@ -309,6 +364,66 @@ export function RecoverySettings({
                   onChange={(e) => setSipConcurrency(Number(e.target.value))}
                 />
               </Field>
+              <ToggleRow
+                id="call-window"
+                label="9am–9pm window"
+                checked={callWindowEnabled}
+                onCheckedChange={setCallWindowEnabled}
+              />
+              {callWindowEnabled ? (
+                <>
+                  <Field label="Window start" htmlFor="call-window-start">
+                    <Input
+                      id="call-window-start"
+                      className="h-8"
+                      type="time"
+                      value={windowStart}
+                      onChange={(e) => setWindowStart(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Window end" htmlFor="call-window-end">
+                    <Input
+                      id="call-window-end"
+                      className="h-8"
+                      type="time"
+                      value={windowEnd}
+                      onChange={(e) => setWindowEnd(e.target.value)}
+                    />
+                  </Field>
+                  <Field
+                    className="col-span-2"
+                    label="Timezone"
+                    htmlFor="call-timezone"
+                  >
+                    <Select
+                      value={timezoneOverride}
+                      onValueChange={setTimezoneOverride}
+                    >
+                      <SelectTrigger id="call-timezone" className="h-8">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="shopify">
+                          Shopify ({settings?.ianaTimezone || "Asia/Kolkata"})
+                        </SelectItem>
+                        {timezoneOverride !== "shopify" &&
+                        !(COMMON_IANA_TIMEZONES as readonly string[]).includes(
+                          timezoneOverride
+                        ) ? (
+                          <SelectItem value={timezoneOverride}>
+                            {timezoneOverride}
+                          </SelectItem>
+                        ) : null}
+                        {COMMON_IANA_TIMEZONES.map((zone) => (
+                          <SelectItem key={zone} value={zone}>
+                            {zone}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </>
+              ) : null}
             </SettingsPanel>
 
             <SettingsPanel title="Optional">

@@ -1,4 +1,8 @@
 import { decryptToken } from "./encryption";
+import {
+  clampToCallWindow,
+  type CallWindowConfig,
+} from "./call-window";
 import { variantGidFromWebhook, type LineItemRecord } from "./line-items";
 import { normalizePhoneNumber } from "./phone";
 import {
@@ -90,9 +94,15 @@ const SHOP_NAME_QUERY = `
   query ShopName {
     shop {
       name
+      ianaTimezone
     }
   }
 `;
+
+export interface ShopProfile {
+  name: string | null;
+  ianaTimezone: string | null;
+}
 
 const ABANDONED_CHECKOUTS_QUERY = `
   query AbandonedCheckouts($first: Int!, $after: String, $query: String) {
@@ -327,18 +337,36 @@ export async function fetchShopMyshopifyAliases(
   return Array.from(hosts);
 }
 
+/** Merchant-facing shop display name and IANA timezone from Shopify Admin. */
+export async function fetchShopProfile(
+  storeDomain: string,
+  adminAccessToken: string
+): Promise<ShopProfile> {
+  const data = await adminGraphql<{
+    shop: { name: string | null; ianaTimezone: string | null };
+  }>(storeDomain, adminAccessToken, SHOP_NAME_QUERY);
+
+  return {
+    name: data.shop.name?.trim() || null,
+    ianaTimezone: data.shop.ianaTimezone?.trim() || null,
+  };
+}
+
 /** Merchant-facing shop display name (e.g. "Acme Store"), not the *.myshopify.com handle. */
 export async function fetchShopName(
   storeDomain: string,
   adminAccessToken: string
 ): Promise<string | null> {
-  const data = await adminGraphql<{ shop: { name: string | null } }>(
-    storeDomain,
-    adminAccessToken,
-    SHOP_NAME_QUERY
-  );
+  const profile = await fetchShopProfile(storeDomain, adminAccessToken);
+  return profile.name;
+}
 
-  return data.shop.name?.trim() || null;
+export async function fetchShopIanaTimezone(
+  storeDomain: string,
+  adminAccessToken: string
+): Promise<string | null> {
+  const profile = await fetchShopProfile(storeDomain, adminAccessToken);
+  return profile.ianaTimezone;
 }
 
 export async function fetchShopifyAbandonedCheckouts(
@@ -580,18 +608,17 @@ export function parseShopMoney(node: ShopifyAbandonedCheckoutNode): number {
 export function computeScheduledCallAt(
   shopifyCreatedAt: Date,
   callDelayMinutes: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  window?: CallWindowConfig | null
 ): Date {
   const delayMs = callDelayMinutes * 60 * 1000;
   const fromAbandonment = new Date(shopifyCreatedAt.getTime() + delayMs);
 
   // Fresh abandonments: call N minutes after the customer left checkout.
-  if (fromAbandonment.getTime() > now.getTime()) {
-    return fromAbandonment;
-  }
+  const raw =
+    fromAbandonment.getTime() > now.getTime() ? fromAbandonment : now;
 
-  // Stale rows: abandonment + delay is already in the past — eligible now.
-  return now;
+  return window ? clampToCallWindow(raw, window) : raw;
 }
 
 /** Recompute schedule on sync; keep existing only for carts still inside their delay window. */
@@ -599,9 +626,15 @@ export function resolveScheduledCallAt(
   existing: { scheduledCallAt: Date | null; autoCallExcluded?: boolean } | null,
   shopifyCreatedAt: Date,
   callDelayMinutes: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  window?: CallWindowConfig | null
 ): Date {
-  const computed = computeScheduledCallAt(shopifyCreatedAt, callDelayMinutes, now);
+  const computed = computeScheduledCallAt(
+    shopifyCreatedAt,
+    callDelayMinutes,
+    now,
+    window
+  );
   const delayMs = callDelayMinutes * 60 * 1000;
   const fromAbandonment = new Date(shopifyCreatedAt.getTime() + delayMs);
   const delayWindowPassed = fromAbandonment.getTime() <= now.getTime();
@@ -616,7 +649,9 @@ export function resolveScheduledCallAt(
 
   // Keep a future time (including operator edits) so sync does not pull it forward.
   if (existing.scheduledCallAt.getTime() > now.getTime()) {
-    return existing.scheduledCallAt;
+    return window
+      ? clampToCallWindow(existing.scheduledCallAt, window)
+      : existing.scheduledCallAt;
   }
 
   // Overdue carts: recompute so old "now + delay" anchors are corrected.

@@ -96,6 +96,15 @@ model Store {
   storefrontToken  String
   callDelayMinutes Int                 @default(30)
   sipConcurrency   Int                 @default(1)
+  /** Shopify Admin `shop.ianaTimezone` (e.g. "Asia/Kolkata"). */
+  ianaTimezone     String              @default("Asia/Kolkata")
+  /** Optional merchant override; blank means use `ianaTimezone`. */
+  ianaTimezoneOverride String          @default("")
+  /** Inclusive local start of the calling window, minutes from midnight (default 09:00). */
+  callWindowStartMinute Int            @default(540)
+  /** Exclusive local end of the calling window, minutes from midnight (default 21:00). */
+  callWindowEndMinute   Int            @default(1260)
+  callWindowEnabled     Boolean        @default(true)
   /** When true, cron syncs and auto-dials due recovery rows even if the dashboard is closed. */
   autoCallsEnabled Boolean             @default(false)
   checkoutSyncMode CheckoutSyncMode    @default(POLLING)
@@ -190,6 +199,8 @@ model AbandonedCheckout {
   scheduledCallAt   DateTime?
   /** When true, sync and auto-call enrollment will not re-schedule this row. */
   autoCallExcluded  Boolean       @default(false)
+  /** Pre-call auto-retry count (draft/cart/enrich/dispatch). Telephony retries are tracked separately. */
+  autoRetryCount    Int           @default(0)
   shopifyCreatedAt  DateTime?
   callStatus        CallStatus    @default(PENDING)
   lastError         String?       @db.Text
@@ -204,6 +215,7 @@ model AbandonedCheckout {
   storeDomain       String
   store             Store         @relation(fields: [storeDomain], references: [storeDomain], onDelete: Cascade)
   callAttempts      CallAttempt[]
+  pipelineEvents    CallPipelineEvent[]
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
@@ -228,6 +240,7 @@ model CallAttempt {
   startedAt           DateTime          @default(now())
   endedAt             DateTime?
   durationSec         Int?
+  pipelineEvents      CallPipelineEvent[]
 
   @@index([abandonedCheckoutId])
   @@index([callId])
@@ -249,6 +262,28 @@ enum CallStatus {
   DRAFT_CREATE_FAILED
   ENRICH_FAILED
   DISPATCH_FAILED
+}
+
+model CallPipelineEvent {
+  id            String             @id @default(uuid())
+  callAttemptId String?
+  callAttempt   CallAttempt?       @relation(fields: [callAttemptId], references: [id], onDelete: SetNull)
+  checkoutId    String
+  checkout      AbandonedCheckout  @relation(fields: [checkoutId], references: [id], onDelete: Cascade)
+  storeDomain   String
+  /** queued | claimed | validate | draft_create | draft_fetch | cart_create | uagents | repeat_customer | sip_dispatch | sip_acked */
+  step          String
+  /** started | succeeded | failed | skipped */
+  status        String
+  startedAt     DateTime
+  endedAt       DateTime?
+  durationMs    Int?
+  detail        Json               @default("{}")
+  createdAt     DateTime           @default(now())
+
+  @@index([checkoutId, startedAt])
+  @@index([callAttemptId])
+  @@index([storeDomain])
 }
 
 /** NDRC = Non-Delivery Report Confirmation. Sheet-sourced orders with failed

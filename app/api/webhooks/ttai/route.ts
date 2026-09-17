@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Prisma } from "@prisma/client";
+import { CallStatus, Prisma } from "@prisma/client";
 import { Webhook } from "standardwebhooks";
 import { db } from "@/lib/db";
+import { maybeScheduleTelephonyRetry } from "@/lib/call-queue";
 import {
   buildCallFeedbackContext,
   writeCallFeedbackIfEnabled,
@@ -355,6 +356,14 @@ export async function POST(request: NextRequest) {
       },
     }),
   ]);
+
+  if (isTerminal && attempt.trigger !== "test") {
+    await maybeScheduleTelephonyRetry({
+      checkout: attempt.checkout,
+      store: attempt.checkout.store,
+      status: mappedStatus as CallStatus,
+    });
+  }
 
   if (
     isTerminal &&

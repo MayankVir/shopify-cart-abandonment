@@ -24,10 +24,10 @@ export function Footer() {
             <div className="space-y-4">
               <h4 className="text-white font-semibold mb-6">Pages</h4>
               <ul className="space-y-4">
-                <li><a href="#features" className="text-sm text-gray-400 hover:text-white transition-colors">All Features</a></li>
-                <li><a href="#how-it-works" className="text-sm text-gray-400 hover:text-white transition-colors">How it works</a></li>
-                <li><a href="#pricing" className="text-sm text-gray-400 hover:text-white transition-colors">Pricing</a></li>
-                <li><a href="#faq" className="text-sm text-gray-400 hover:text-white transition-colors">FAQ</a></li>
+                <li><Link href="/#features" className="text-sm text-gray-400 hover:text-white transition-colors">All Features</Link></li>
+                <li><Link href="/#how-it-works" className="text-sm text-gray-400 hover:text-white transition-colors">How it works</Link></li>
+                <li><Link href="/#pricing" className="text-sm text-gray-400 hover:text-white transition-colors">Pricing</Link></li>
+                <li><Link href="/#faq" className="text-sm text-gray-400 hover:text-white transition-colors">FAQ</Link></li>
               </ul>
             </div>
             
@@ -43,9 +43,9 @@ export function Footer() {
             <div className="space-y-4">
               <h4 className="text-white font-semibold mb-6">Legal</h4>
               <ul className="space-y-4">
-                <li><a href="#" className="text-sm text-gray-400 hover:text-white transition-colors">Privacy Policy</a></li>
-                <li><a href="#" className="text-sm text-gray-400 hover:text-white transition-colors">Terms of Service</a></li>
-                <li><a href="#" className="text-sm text-gray-400 hover:text-white transition-colors">Cookie Policy</a></li>
+                <li><Link href="/privacy" className="text-sm text-gray-400 hover:text-white transition-colors">Privacy Policy</Link></li>
+                <li><Link href="/terms" className="text-sm text-gray-400 hover:text-white transition-colors">Terms of Service</Link></li>
+                <li><Link href="/privacy#cookies" className="text-sm text-gray-400 hover:text-white transition-colors">Cookie Policy</Link></li>
               </ul>
             </div>
 

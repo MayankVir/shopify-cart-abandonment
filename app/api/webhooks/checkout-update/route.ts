@@ -13,6 +13,7 @@ import {
 import { mapWebhookLineItems } from "@/lib/line-items";
 import { isActiveCall, nextCallScheduledFlag } from "@/lib/call-status";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
+import { callWindowFromStore } from "@/lib/call-window";
 import { mergeIncomingUserContext } from "@/lib/user-context";
 import {
   findStoreForWebhook,
@@ -200,7 +201,9 @@ export async function POST(request: NextRequest) {
   const scheduledCallAt = resolveScheduledCallAt(
     existing,
     existing?.shopifyCreatedAt ?? shopifyCreatedAt,
-    store.callDelayMinutes
+    store.callDelayMinutes,
+    new Date(),
+    callWindowFromStore(store)
   );
 
   if (existing && !incomingPhone) {

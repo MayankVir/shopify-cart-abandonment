@@ -23,6 +23,17 @@ import {
   parseShippingAddressFromUserContext,
   type ShippingAddressFields,
 } from "@/lib/shipping-address";
+import {
+  type PipelineEventContext,
+  recordPipelineEvent,
+  startPipelineStep,
+} from "@/lib/call-pipeline-events";
+import {
+  claimDueAutoCalls,
+  markQueueClaimed,
+  schedulePreCallRetry,
+  sipConcurrencySlots,
+} from "@/lib/call-queue";
 
 export type RecoveryTrigger = "manual" | "auto";
 
@@ -32,6 +43,7 @@ export interface RecoveryPipelineResult {
   callAttemptId?: string;
   checkoutUrl?: string;
   draftOrderId?: string;
+  dispatchDurationMs?: number;
 }
 
 function parseLineItems(json: Prisma.JsonValue): LineItemRecord[] {
@@ -58,37 +70,53 @@ function sheetContextFromUserContext(userContext: string): {
 }
 
 async function markFailure(
-  checkoutId: string,
+  checkout: AbandonedCheckout & { store: Store },
   attemptId: string,
   status: CallStatus,
   stage: string,
   reason: string
 ) {
-  const resetCheckout = PRE_CALL_FAILURE_STATUSES.includes(status);
-
   const safeReason = sanitizeRecoveryError(reason);
 
-  await db.$transaction([
-    db.callAttempt.update({
-      where: { id: attemptId },
-      data: {
-        status,
-        failureStage: stage,
-        failureReason: safeReason,
-        endedAt: new Date(),
-      },
-    }),
-    db.abandonedCheckout.update({
-      where: { id: checkoutId },
-      data: {
-        callStatus: resetCheckout ? CallStatus.PENDING : status,
-        lastError: safeReason,
-        ...(status === CallStatus.DRAFT_CREATE_FAILED
-          ? { draftOrderId: "", draftOrderName: "" }
-          : {}),
-      },
-    }),
-  ]);
+  await db.callAttempt.update({
+    where: { id: attemptId },
+    data: {
+      status,
+      failureStage: stage,
+      failureReason: safeReason,
+      endedAt: new Date(),
+    },
+  });
+
+  const draftReset =
+    status === CallStatus.DRAFT_CREATE_FAILED
+      ? { draftOrderId: "", draftOrderName: "" }
+      : {};
+
+  if (PRE_CALL_FAILURE_STATUSES.includes(status)) {
+    await db.abandonedCheckout.update({
+      where: { id: checkout.id },
+      data: draftReset,
+    });
+    await schedulePreCallRetry({
+      checkoutId: checkout.id,
+      store: checkout.store,
+      autoRetryCount: checkout.autoRetryCount,
+      autoCallExcluded: checkout.autoCallExcluded,
+      failureStatus: status,
+      reason: safeReason,
+    });
+    return;
+  }
+
+  await db.abandonedCheckout.update({
+    where: { id: checkout.id },
+    data: {
+      callStatus: status,
+      lastError: safeReason,
+      ...draftReset,
+    },
+  });
 }
 
 async function persistCheckoutError(checkoutId: string, reason: string) {
@@ -102,32 +130,47 @@ export async function runRecoveryCallPipeline(
   checkout: AbandonedCheckout & { store: Store },
   trigger: RecoveryTrigger
 ): Promise<RecoveryPipelineResult> {
+  const pipelineStartedAt = Date.now();
+  const ctx: PipelineEventContext = {
+    checkoutId: checkout.id,
+    storeDomain: checkout.storeDomain,
+    trigger,
+  };
+
+  const validateStep = startPipelineStep(ctx, "validate");
   const phone = normalizePhoneNumber(checkout.customerPhone);
   if (!phone) {
     const error = "No valid E.164 phone number on checkout";
+    await validateStep.fail(error);
     await persistCheckoutError(checkout.id, error);
-    return { success: false, error };
+    return { success: false, error, dispatchDurationMs: Date.now() - pipelineStartedAt };
   }
 
   if (
     checkout.callStatus === CallStatus.DISPATCHED ||
     checkout.callStatus === CallStatus.PREPARING
   ) {
-    return { success: false, error: "Call already in progress" };
+    const error = "Call already in progress";
+    await validateStep.fail(error);
+    return { success: false, error, dispatchDurationMs: Date.now() - pipelineStartedAt };
   }
 
   if (checkout.callStatus === CallStatus.COMPLETED) {
-    return { success: false, error: "Checkout already recovered" };
+    const error = "Checkout already recovered";
+    await validateStep.fail(error);
+    return { success: false, error, dispatchDurationMs: Date.now() - pipelineStartedAt };
   }
 
   if (checkout.store.clerkUserId) {
     const billing = await hasBillableMinutes(checkout.store.clerkUserId);
     if (!billing.allowed) {
       const error = billing.reason ?? "Insufficient call minutes";
+      await validateStep.fail(error);
       await persistCheckoutError(checkout.id, error);
-      return { success: false, error };
+      return { success: false, error, dispatchDurationMs: Date.now() - pipelineStartedAt };
     }
   }
+  await validateStep.succeed();
 
   const attempt = await db.callAttempt.create({
     data: {
@@ -137,6 +180,7 @@ export async function runRecoveryCallPipeline(
       dynamicVarsJson: {},
     },
   });
+  ctx.callAttemptId = attempt.id;
 
   await db.abandonedCheckout.update({
     where: { id: checkout.id },
@@ -155,10 +199,10 @@ export async function runRecoveryCallPipeline(
   const lineItems = parseLineItems(checkout.lineItemsJson);
   const sheetCtx = sheetContextFromUserContext(checkout.userContext);
   const hasVariants = lineItemsHaveVariantId(lineItems);
-  // Sheet flow always creates a fresh draft per call; poll/webhook reuses an existing one.
   const shouldCreateDraft =
     hasVariants && (useSheetFlow || !hasDraftOrderId(draftOrderId));
 
+  const draftCreateStep = startPipelineStep(ctx, "draft_create");
   try {
     if (shouldCreateDraft) {
       const draft = await createDraftOrderForStore(checkout.store, {
@@ -187,45 +231,58 @@ export async function runRecoveryCallPipeline(
         `[recovery] Persisted draft on AbandonedCheckout`,
         JSON.stringify(saved)
       );
+      await draftCreateStep.succeed({ draftOrderId });
     } else if (!hasDraftOrderId(draftOrderId) && !hasVariants) {
+      const reason = "Line items missing variant IDs for draft order";
+      await draftCreateStep.fail(reason);
       await markFailure(
-        checkout.id,
+        checkout,
         attempt.id,
         CallStatus.DRAFT_CREATE_FAILED,
         "draft_create",
-        "Line items missing variant IDs for draft order"
+        reason
       );
       return {
         success: false,
-        error: "Line items missing variant IDs for draft order",
+        error: reason,
+        dispatchDurationMs: Date.now() - pipelineStartedAt,
       };
+    } else {
+      await draftCreateStep.skip(
+        hasDraftOrderId(draftOrderId) ? "Reusing existing draft" : "Draft not required"
+      );
     }
   } catch (error) {
     const reason =
       error instanceof Error ? error.message : "Draft order creation failed";
+    await draftCreateStep.fail(reason);
     await markFailure(
-      checkout.id,
+      checkout,
       attempt.id,
       CallStatus.DRAFT_CREATE_FAILED,
       "draft_create",
       reason
     );
-    return { success: false, error: reason };
+    return { success: false, error: reason, dispatchDurationMs: Date.now() - pipelineStartedAt };
   }
 
   if (useSheetFlow && !hasDraftOrderId(draftOrderId)) {
     const reason = "Draft order is required before calling (sheet mode)";
+    await recordPipelineEvent(ctx, "draft_create", "failed", {
+      detail: { error: reason },
+    });
     await markFailure(
-      checkout.id,
+      checkout,
       attempt.id,
       CallStatus.DRAFT_CREATE_FAILED,
       "draft_create",
       reason
     );
-    return { success: false, error: reason };
+    return { success: false, error: reason, dispatchDurationMs: Date.now() - pipelineStartedAt };
   }
 
   let draftOrderContextJson = "";
+  const draftFetchStep = startPipelineStep(ctx, "draft_fetch");
   if (hasDraftOrderId(draftOrderId)) {
     try {
       const draftContext = await getDraftOrderContextForStore(
@@ -236,20 +293,25 @@ export async function runRecoveryCallPipeline(
       if (!draftOrderName && typeof draftContext.name === "string") {
         draftOrderName = draftContext.name;
       }
+      await draftFetchStep.succeed();
     } catch (error) {
       const reason =
         error instanceof Error ? error.message : "Failed to fetch draft order";
+      await draftFetchStep.fail(reason);
       await markFailure(
-        checkout.id,
+        checkout,
         attempt.id,
         CallStatus.DRAFT_CREATE_FAILED,
         "draft_fetch",
         reason
       );
-      return { success: false, error: reason };
+      return { success: false, error: reason, dispatchDurationMs: Date.now() - pipelineStartedAt };
     }
+  } else {
+    await draftFetchStep.skip("No draft order");
   }
 
+  const cartStep = startPipelineStep(ctx, "cart_create");
   if (!useSheetFlow) {
     try {
       if (!cartId && lineItemsHaveVariantId(lineItems)) {
@@ -264,16 +326,19 @@ export async function runRecoveryCallPipeline(
         );
 
         if (!cart) {
+          const reason = "No variant IDs available to rebuild cart";
+          await cartStep.fail(reason);
           await markFailure(
-            checkout.id,
+            checkout,
             attempt.id,
             CallStatus.CART_CREATE_FAILED,
             "cart_create",
-            "No variant IDs available to rebuild cart"
+            reason
           );
           return {
             success: false,
             error: "Cannot create cart — no variant IDs on line items",
+            dispatchDurationMs: Date.now() - pipelineStartedAt,
           };
         }
 
@@ -284,19 +349,25 @@ export async function runRecoveryCallPipeline(
           where: { id: checkout.id },
           data: { cartId, checkoutUrl },
         });
+        await cartStep.succeed();
+      } else {
+        await cartStep.skip(cartId ? "Cart already exists" : "No variant IDs");
       }
     } catch (error) {
       const reason =
         error instanceof Error ? error.message : "Cart creation failed";
+      await cartStep.fail(reason);
       await markFailure(
-        checkout.id,
+        checkout,
         attempt.id,
         CallStatus.CART_CREATE_FAILED,
         "cart_create",
         reason
       );
-      return { success: false, error: reason };
+      return { success: false, error: reason, dispatchDurationMs: Date.now() - pipelineStartedAt };
     }
+  } else {
+    await cartStep.skip("Sheet flow uses draft checkout");
   }
 
   let orderContext = checkout.orderContext;
@@ -305,6 +376,7 @@ export async function runRecoveryCallPipeline(
     ? (checkout.relatedItems as unknown[])
     : [];
 
+  const enrichStep = startPipelineStep(ctx, "uagents");
   if (isUAgentsConfigured()) {
     try {
       const enriched = await fetchUAgentsContext(checkout.checkoutToken, phone);
@@ -320,24 +392,29 @@ export async function runRecoveryCallPipeline(
           relatedItems: relatedItems as Prisma.InputJsonValue,
         },
       });
+      await enrichStep.succeed();
     } catch (error) {
       const reason =
         error instanceof Error ? error.message : "uAgents enrichment failed";
+      await enrichStep.fail(reason);
       await markFailure(
-        checkout.id,
+        checkout,
         attempt.id,
         CallStatus.ENRICH_FAILED,
         "uagents_enrich",
         reason
       );
-      return { success: false, error: reason };
+      return { success: false, error: reason, dispatchDurationMs: Date.now() - pipelineStartedAt };
     }
+  } else {
+    await enrichStep.skip("uAgents not configured");
   }
 
   const scenarioId = checkout.store.ttaiScenarioId ?? "";
   const sipTrunkId = checkout.store.ttaiTrunkId ?? "";
 
   let isRepeatCustomer: boolean | undefined;
+  const repeatStep = startPipelineStep(ctx, "repeat_customer");
   if (checkout.store.repeatCustomerCheckEnabled) {
     const repeatInfo = await getRepeatCustomerInfo(
       checkout.store,
@@ -346,7 +423,6 @@ export async function runRecoveryCallPipeline(
     );
     if (repeatInfo) {
       isRepeatCustomer = repeatInfo.isRepeatCustomer;
-      console.log( "repeatInfo", repeatInfo);
       await db.abandonedCheckout.update({
         where: { id: checkout.id },
         data: {
@@ -357,7 +433,12 @@ export async function runRecoveryCallPipeline(
             : null,
         },
       });
+      await repeatStep.succeed({ isRepeatCustomer });
+    } else {
+      await repeatStep.skip("No match or lookup failed");
     }
+  } else {
+    await repeatStep.skip("Repeat-customer check disabled");
   }
 
   const dynamicVars = buildSipDynamicVars({
@@ -380,12 +461,11 @@ export async function runRecoveryCallPipeline(
     isRepeatCustomer,
   });
 
-  console.log("dynamicVars", dynamicVars);
-
   console.info(
     `[recovery] Dispatching SIP call for checkout ${checkout.id}: draftOrderId=${draftOrderId || "(none)"} phone=${phone}`
   );
 
+  const sipStep = startPipelineStep(ctx, "sip_dispatch");
   const sipResult = await dispatchSipCall({
     phone,
     scenarioId,
@@ -394,15 +474,25 @@ export async function runRecoveryCallPipeline(
   });
 
   if (!sipResult.success) {
+    const reason = sipResult.error || "SIP dispatch failed";
+    await sipStep.fail(reason);
     await markFailure(
-      checkout.id,
+      checkout,
       attempt.id,
       CallStatus.DISPATCH_FAILED,
       "sip_dispatch",
-      sipResult.error || "SIP dispatch failed"
+      reason
     );
-    return { success: false, error: sipResult.error };
+    return {
+      success: false,
+      error: sipResult.error,
+      dispatchDurationMs: Date.now() - pipelineStartedAt,
+    };
   }
+  await sipStep.succeed({ callId: sipResult.callId, sessionId: sipResult.sessionId });
+  await recordPipelineEvent(ctx, "sip_acked", "succeeded", {
+    detail: { callId: sipResult.callId, sessionId: sipResult.sessionId },
+  });
 
   await db.$transaction([
     db.callAttempt.update({
@@ -421,6 +511,7 @@ export async function runRecoveryCallPipeline(
         callScheduled: true,
         sessionId: sipResult.sessionId ?? checkout.sessionId,
         lastError: null,
+        autoRetryCount: 0,
       },
     }),
   ]);
@@ -430,6 +521,7 @@ export async function runRecoveryCallPipeline(
     callAttemptId: attempt.id,
     checkoutUrl: useSheetFlow ? undefined : checkoutUrl,
     draftOrderId,
+    dispatchDurationMs: Date.now() - pipelineStartedAt,
   };
 }
 
@@ -514,7 +606,7 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
   const store = await db.store.findUnique({ where: { storeDomain } });
   if (!store?.autoCallsEnabled) return empty;
 
-  const concurrency = Math.min(10, Math.max(1, store.sipConcurrency));
+  const concurrency = sipConcurrencySlots(store.sipConcurrency);
   const upcomingForToken = await db.abandonedCheckout.findMany({
     where: {
       storeDomain,
@@ -538,28 +630,8 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
     })
   );
 
-  const inFlight = await db.abandonedCheckout.count({
-    where: {
-      storeDomain,
-      callStatus: { in: [CallStatus.PREPARING, CallStatus.DISPATCHED] },
-    },
-  });
-
-  const slots = Math.max(0, concurrency - inFlight);
-  if (slots === 0) return empty;
-
-  const due = await db.abandonedCheckout.findMany({
-    where: {
-      storeDomain,
-      callStatus: CallStatus.PENDING,
-      callScheduled: true,
-      customerPhone: { not: "" },
-      scheduledCallAt: { lte: new Date() },
-    },
-    orderBy: { scheduledCallAt: "asc" },
-    take: slots,
-    include: { store: true },
-  });
+  const due = await claimDueAutoCalls(store);
+  if (due.length === 0) return empty;
 
   let processed = 0;
   let errors = 0;
@@ -570,6 +642,12 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
   }> = [];
 
   for (const checkout of due) {
+    await recordPipelineEvent(
+      { checkoutId: checkout.id, storeDomain, trigger: "auto" },
+      "queued",
+      "succeeded"
+    );
+    await markQueueClaimed(checkout, "auto");
     const result = await runRecoveryCallPipeline(checkout, "auto");
     if (result.success) {
       processed++;
@@ -589,6 +667,7 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
       JSON.stringify({
         storeDomain,
         ...failure,
+        dispatchDurationMs: result.dispatchDurationMs,
       })
     );
   }

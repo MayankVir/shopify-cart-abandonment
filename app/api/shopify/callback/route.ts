@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptToken } from "@/lib/encryption";
-import { fetchShopName } from "@/lib/shopify-admin";
+import { fetchShopProfile } from "@/lib/shopify-admin";
 import { ensureMerchantForUser } from "@/lib/billing";
 import { normalizeStoreDomain } from "@/lib/store-domain";
 import {
@@ -110,13 +110,17 @@ export async function GET(request: NextRequest) {
   });
 
   try {
-    const shopName = await fetchShopName(storeDomain, tokenData.access_token);
-    if (shopName) {
-      await db.store.update({ where: { storeDomain }, data: { name: shopName } });
-    }
+    const profile = await fetchShopProfile(storeDomain, tokenData.access_token);
+    await db.store.update({
+      where: { storeDomain },
+      data: {
+        ...(profile.name ? { name: profile.name } : {}),
+        ...(profile.ianaTimezone ? { ianaTimezone: profile.ianaTimezone } : {}),
+      },
+    });
   } catch (nameError) {
     console.warn(
-      "Could not fetch shop name after OAuth connect:",
+      "Could not fetch shop profile after OAuth connect:",
       nameError instanceof Error ? nameError.message : nameError
     );
   }

@@ -11,6 +11,7 @@ import {
 import { normalizePhoneNumber } from "@/lib/phone";
 import { nextCallScheduledFlag } from "@/lib/call-status";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
+import { callWindowFromStore } from "@/lib/call-window";
 import { mergeIncomingUserContext } from "@/lib/user-context";
 import { parseSheetUrl, sheetGvizRangeUrl } from "@/lib/sheet-url";
 import {
@@ -660,6 +661,11 @@ export async function syncAbandonedCheckoutsFromSheet(
     | "callDelayMinutes"
     | "sheetSyncDirection"
     | "autoCallsEnabled"
+    | "ianaTimezone"
+    | "ianaTimezoneOverride"
+    | "callWindowEnabled"
+    | "callWindowStartMinute"
+    | "callWindowEndMinute"
   >,
   options: { page?: number; pageSize?: number } = {}
 ): Promise<SheetSyncResult> {
@@ -707,7 +713,9 @@ export async function syncAbandonedCheckoutsFromSheet(
     const scheduledCallAt = resolveScheduledCallAt(
       existing,
       referenceDate,
-      store.callDelayMinutes
+      store.callDelayMinutes,
+      new Date(),
+      callWindowFromStore(store)
     );
 
     const lineItemsJson = row.lineItems as unknown as Prisma.InputJsonValue;

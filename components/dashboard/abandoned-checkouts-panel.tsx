@@ -54,6 +54,7 @@ import {
 } from "@/components/dashboard/recovery-settings";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { formatDurationMs } from "@/lib/call-pipeline-events";
 import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
 import { CallStatus } from "@prisma/client";
 
@@ -128,6 +129,7 @@ function CheckoutRow({
   const status = displayCheckoutStatus(
     checkout.callStatus,
     checkout.callScheduled,
+    checkout.lastError,
   );
   const customerLabel =
     checkout.customerName ||
@@ -148,8 +150,8 @@ function CheckoutRow({
       }
       toast.success(
         result.checkoutUrl
-          ? "Call dispatched — cart checkout URL ready"
-          : "Recovery call dispatched",
+          ? `Call dispatched in ${formatDurationMs(result.dispatchDurationMs)} — cart checkout URL ready`
+          : `Recovery call dispatched in ${formatDurationMs(result.dispatchDurationMs)}`,
       );
       onRefresh();
     });
@@ -425,8 +427,8 @@ export function AbandonedCheckoutsPanel() {
       }
       toast.success(
         result.checkoutUrl
-          ? "Call dispatched — cart checkout URL ready"
-          : "Recovery call dispatched",
+          ? `Call dispatched in ${formatDurationMs(result.dispatchDurationMs)} — cart checkout URL ready`
+          : `Recovery call dispatched in ${formatDurationMs(result.dispatchDurationMs)}`,
       );
       void refreshOpenCheckouts({ silent: true });
     });

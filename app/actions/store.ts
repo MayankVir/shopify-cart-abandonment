@@ -21,7 +21,7 @@ import {
 } from "@/lib/store-domain";
 import {
   fetchShopMyshopifyAliases,
-  fetchShopName,
+  fetchShopProfile,
   verifyStoreAdminAccess,
 } from "@/lib/shopify-admin";
 import {
@@ -168,11 +168,14 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
     }
 
     let shopName: string | null = null;
+    let ianaTimezone: string | null = null;
     try {
-      shopName = await fetchShopName(storeDomain, adminTokenForApi);
+      const profile = await fetchShopProfile(storeDomain, adminTokenForApi);
+      shopName = profile.name;
+      ianaTimezone = profile.ianaTimezone;
     } catch (nameError) {
       console.warn(
-        "Could not auto-fetch shop name:",
+        "Could not auto-fetch shop profile:",
         nameError instanceof Error ? nameError.message : nameError
       );
     }
@@ -190,6 +193,7 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
         clerkUserId: userId,
         alternateShopDomains,
         ...(shopName ? { name: shopName } : {}),
+        ...(ianaTimezone ? { ianaTimezone } : {}),
         apiKey: encryptToken(apiKey),
         apiSecret: encryptToken(apiSecret),
         adminAccessToken: encryptToken(""),
@@ -198,6 +202,7 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
       update: {
         alternateShopDomains,
         ...(shopName ? { name: shopName } : {}),
+        ...(ianaTimezone ? { ianaTimezone } : {}),
         apiKey: encryptToken(apiKey),
         apiSecret: encryptToken(apiSecret),
         adminAccessToken: encryptToken(""),

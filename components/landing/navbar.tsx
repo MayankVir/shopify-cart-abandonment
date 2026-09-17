@@ -15,10 +15,10 @@ export async function Navbar() {
         </Link>
         
         <div className="hidden md:flex items-center space-x-8 text-sm font-medium text-gray-300">
-          <a href="#features" className="hover:text-white transition-colors">Features</a>
-          <a href="#how-it-works" className="hover:text-white transition-colors">How it Works</a>
-          <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
-          <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
+          <a href="/#features" className="hover:text-white transition-colors">Features</a>
+          <a href="/#how-it-works" className="hover:text-white transition-colors">How it Works</a>
+          <a href="/#pricing" className="hover:text-white transition-colors">Pricing</a>
+          <a href="/#faq" className="hover:text-white transition-colors">FAQ</a>
         </div>
 
         <div className="flex items-center space-x-4">

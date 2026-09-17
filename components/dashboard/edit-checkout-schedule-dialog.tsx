@@ -125,7 +125,7 @@ export function EditCheckoutScheduleDialog({
               </p>
             ) : (
               <p id="checkout-scheduled-at-hint" className="text-xs text-muted-foreground">
-                Uses your local timezone. Maximum 30 days from now.
+                Uses your local timezone. Auto-calls stay inside the store calling window (default 9am–9pm). Maximum 30 days from now.
               </p>
             )}
           </div>

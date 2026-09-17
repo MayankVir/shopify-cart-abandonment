@@ -3,7 +3,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { CallStatus, CheckoutSyncMode, Prisma, SheetSyncDirection } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
+import { canEditSchedule, canStopCall, nextCallScheduledFlag } from "@/lib/call-status";
 import {
   type CheckoutSyncModeValue,
   isCheckoutSyncMode,
@@ -18,11 +18,28 @@ import {
 import { runRecoveryCallPipeline, processScheduledCallsForStore, stopRecoveryCall } from "@/lib/recovery-pipeline";
 import { assertStoreAccess, StoreAccessError } from "@/lib/store-access";
 import {
+  callWindowFromStore,
+  clampToCallWindow,
+  clampWindowMinute,
+  DEFAULT_CALL_WINDOW_END_MINUTE,
+  DEFAULT_CALL_WINDOW_START_MINUTE,
+  isValidTimeZone,
+} from "@/lib/call-window";
+import {
+  enrollOpenCheckoutsForAutoCall,
+  unschedulePendingAutoCalls,
+} from "@/lib/call-queue";
+import {
+  toPipelineEventRow,
+  type PipelineEventRow,
+} from "@/lib/call-pipeline-events";
+import {
   ABANDONED_CHECKOUTS_PAGE_SIZE,
   checkoutTokenFromNode,
   extractCheckoutCustomerName,
   extractCheckoutPhone,
   fetchGrantedAdminScopes,
+  fetchShopIanaTimezone,
   fetchShopifyAbandonedCheckouts,
   isRetryableStatus,
   mapAdminLineItems,
@@ -43,7 +60,6 @@ import {
   getCachedAdminTokenInfo,
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
-import { canEditSchedule, canStopCall, nextCallScheduledFlag } from "@/lib/call-status";
 import { parseLineItems } from "@/lib/line-items";
 import {
   SHEET_SYNC_PAGE_SIZE,
@@ -116,6 +132,7 @@ export interface AbandonedCheckoutRow {
   sessionId: string | null;
   storeDomain: string;
   latestAttempt: CallAttemptRow | null;
+  autoRetryCount: number;
   lineItems: Array<{ title: string; quantity: number }>;
 }
 
@@ -210,6 +227,7 @@ function toRow(
     sessionId: c.sessionId,
     storeDomain: c.storeDomain,
     latestAttempt: latest ? toAttemptRow(latest) : null,
+    autoRetryCount: c.autoRetryCount,
     lineItems: parseLineItems(c.lineItemsJson).map((item) => ({
       title: item.title,
       quantity: item.quantity,
@@ -228,13 +246,6 @@ async function fetchOpenCheckouts(
   page = 0,
   pageSize = ABANDONED_CHECKOUTS_PAGE_SIZE
 ) {
-  await db.abandonedCheckout.updateMany({
-    where: {
-      storeDomain,
-      callStatus: { in: PRE_CALL_FAILURE_STATUSES },
-    },
-    data: { callStatus: CallStatus.PENDING },
-  });
   const skip = page * pageSize;
   const where = {
     storeDomain,
@@ -316,25 +327,13 @@ export async function getAbandonedCheckoutsForStore(
 
 async function applyAutoCallEnrollment(storeDomain: string, enabled: boolean) {
   if (enabled) {
-    await db.abandonedCheckout.updateMany({
-      where: {
-        storeDomain,
-        callStatus: CallStatus.PENDING,
-        customerPhone: { not: "" },
-        autoCallExcluded: false,
-      },
-      data: { callScheduled: true },
-    });
+    const store = await db.store.findUnique({ where: { storeDomain } });
+    if (!store) return;
+    await enrollOpenCheckoutsForAutoCall(store);
     return;
   }
 
-  await db.abandonedCheckout.updateMany({
-    where: {
-      storeDomain,
-      callStatus: CallStatus.PENDING,
-    },
-    data: { callScheduled: false },
-  });
+  await unschedulePendingAutoCalls(storeDomain);
 }
 
 async function dispatchDueAutoCalls(storeDomain: string, enabled: boolean) {
@@ -466,7 +465,9 @@ export async function syncAbandonedCheckoutsForStore(
       const scheduledCallAt = resolveScheduledCallAt(
         existing,
         shopifyCreatedAt,
-        store.callDelayMinutes
+        store.callDelayMinutes,
+        new Date(),
+        callWindowFromStore(store)
       );
       const existingName = parseCustomerNameFromUserContext(
         existing?.userContext
@@ -609,6 +610,7 @@ export async function initiateRecoveryCall(
   error?: string;
   checkoutUrl?: string;
   draftOrderId?: string;
+  dispatchDurationMs?: number;
 }> {
   const { userId } = await auth();
   if (!userId) {
@@ -659,6 +661,7 @@ export async function initiateRecoveryCall(
     error: result.error,
     checkoutUrl: result.checkoutUrl,
     draftOrderId: result.draftOrderId,
+    dispatchDurationMs: result.dispatchDurationMs,
   };
 }
 
@@ -690,10 +693,19 @@ export async function updateCheckoutScheduleAction(
     };
   }
 
-  const scheduledCallAt = new Date(scheduledCallAtIso);
-  if (Number.isNaN(scheduledCallAt.getTime())) {
+  const store = await db.store.findUnique({
+    where: { storeDomain: checkout.storeDomain },
+  });
+  if (!store) {
+    return { success: false, error: "Store not found" };
+  }
+
+  const requested = new Date(scheduledCallAtIso);
+  if (Number.isNaN(requested.getTime())) {
     return { success: false, error: "Enter a valid date and time" };
   }
+
+  const scheduledCallAt = clampToCallWindow(requested, callWindowFromStore(store));
 
   const now = Date.now();
   if (scheduledCallAt.getTime() - now > MAX_SCHEDULE_AHEAD_MS) {
@@ -711,14 +723,6 @@ export async function updateCheckoutScheduleAction(
       autoCallExcluded: false,
     },
   });
-
-  const store = await db.store.findUnique({
-    where: { storeDomain: checkout.storeDomain },
-    select: { autoCallsEnabled: true },
-  });
-  if (store?.autoCallsEnabled && scheduledCallAt.getTime() <= Date.now()) {
-    await dispatchDueAutoCalls(checkout.storeDomain, true);
-  }
 
   revalidatePath("/dashboard/analytics");
   revalidatePath("/dashboard/billing");
@@ -877,6 +881,26 @@ export async function getCallAttemptsForCheckout(
   return attempts.map(toAttemptRow);
 }
 
+export async function getPipelineEventsForCheckout(
+  checkoutId: string
+): Promise<PipelineEventRow[]> {
+  const checkout = await db.abandonedCheckout.findUnique({
+    where: { id: checkoutId },
+    select: { storeDomain: true },
+  });
+  if (!checkout) return [];
+
+  const accessError = await guardStoreAccess(checkout.storeDomain);
+  if (accessError) return [];
+
+  const events = await db.callPipelineEvent.findMany({
+    where: { checkoutId },
+    orderBy: { startedAt: "asc" },
+  });
+
+  return events.map(toPipelineEventRow);
+}
+
 export async function getLastWebhookStatus(): Promise<WebhookDebugInfo | null> {
   const { userId } = await auth();
   if (!userId) return null;
@@ -949,6 +973,11 @@ export async function getStoreRecoverySettings(storeDomain: string) {
       repeatCustomerWindowDays: true,
       ttaiScenarioId: true,
       ttaiTrunkId: true,
+      ianaTimezone: true,
+      ianaTimezoneOverride: true,
+      callWindowEnabled: true,
+      callWindowStartMinute: true,
+      callWindowEndMinute: true,
     },
   });
 }
@@ -1132,7 +1161,13 @@ export async function updateStoreRecoverySettings(
   storeDomain: string,
   callDelayMinutes: number,
   sipConcurrency?: number,
-  autoCallsEnabled?: boolean
+  autoCallsEnabled?: boolean,
+  window?: {
+    callWindowEnabled?: boolean;
+    callWindowStartMinute?: number;
+    callWindowEndMinute?: number;
+    ianaTimezoneOverride?: string;
+  }
 ): Promise<{ success: boolean; error?: string }> {
   const accessError = await guardStoreAccess(storeDomain);
   if (accessError) {
@@ -1154,18 +1189,45 @@ export async function updateStoreRecoverySettings(
     };
   }
 
+  const startMinute = clampWindowMinute(
+    window?.callWindowStartMinute ?? DEFAULT_CALL_WINDOW_START_MINUTE,
+    DEFAULT_CALL_WINDOW_START_MINUTE
+  );
+  const endMinute = clampWindowMinute(
+    window?.callWindowEndMinute ?? DEFAULT_CALL_WINDOW_END_MINUTE,
+    DEFAULT_CALL_WINDOW_END_MINUTE
+  );
+  if (window && startMinute >= endMinute) {
+    return {
+      success: false,
+      error: "Call window start must be before the end time",
+    };
+  }
+
+  const override = window?.ianaTimezoneOverride?.trim() ?? "";
+  if (override && !isValidTimeZone(override)) {
+    return { success: false, error: "Enter a valid IANA timezone" };
+  }
+
   await db.store.update({
     where: { storeDomain },
     data: {
       callDelayMinutes,
       sipConcurrency: concurrency,
       ...(autoCallsEnabled !== undefined ? { autoCallsEnabled } : {}),
+      ...(window
+        ? {
+            callWindowEnabled: window.callWindowEnabled ?? true,
+            callWindowStartMinute: startMinute,
+            callWindowEndMinute: endMinute,
+            ianaTimezoneOverride: override,
+          }
+        : {}),
     },
   });
 
   if (autoCallsEnabled !== undefined) {
     await applyAutoCallEnrollment(storeDomain, autoCallsEnabled);
-    await dispatchDueAutoCalls(storeDomain, autoCallsEnabled);
   }
 
   revalidatePath("/dashboard/analytics");
@@ -1188,7 +1250,6 @@ export async function updateStoreAutoCallsEnabled(
     data: { autoCallsEnabled: enabled },
   });
   await applyAutoCallEnrollment(storeDomain, enabled);
-  await dispatchDueAutoCalls(storeDomain, enabled);
 
   revalidatePath("/dashboard/recovery");
   return { success: true };
@@ -1274,6 +1335,23 @@ export async function runAutoCallCron(): Promise<{
         ...tokenPrep,
       })
     );
+
+    try {
+      const adminAuth = await resolveStoreAdminAccessToken(store);
+      const tz = await fetchShopIanaTimezone(store.storeDomain, adminAuth.token);
+      if (tz && tz !== store.ianaTimezone) {
+        await db.store.update({
+          where: { storeDomain: store.storeDomain },
+          data: { ianaTimezone: tz },
+        });
+        store.ianaTimezone = tz;
+      }
+    } catch (tzError) {
+      console.warn(
+        "[process-calls] timezone refresh failed",
+        tzError instanceof Error ? tzError.message : tzError
+      );
+    }
 
     if (store.checkoutSyncMode !== CheckoutSyncMode.WEBHOOK) {
       const syncResult = await syncAbandonedCheckoutsForStore(store);

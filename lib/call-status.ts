@@ -57,9 +57,13 @@ export function formatCallStatus(status: CallStatus): string {
 
 export function displayCheckoutStatus(
   status: CallStatus,
-  callScheduled: boolean
+  callScheduled: boolean,
+  lastError?: string | null
 ): { label: string; variant: BadgeVariant } {
   if (status === CallStatus.PENDING) {
+    if (callScheduled && lastError) {
+      return { label: "Retry scheduled", variant: "warning" };
+    }
     return callScheduled
       ? { label: "Scheduled", variant: "info" }
       : { label: "Pending", variant: "muted" };

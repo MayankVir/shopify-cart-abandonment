@@ -5,11 +5,17 @@ import { toast } from "sonner";
 import { AlertCircle, Loader2, Pencil, Phone, PhoneOff } from "lucide-react";
 import {
   getCallAttemptsForCheckout,
+  getPipelineEventsForCheckout,
   updateCheckoutCustomerNameAction,
   type AbandonedCheckoutRow,
   type CallAttemptRow,
 } from "@/app/actions/abandoned-checkouts";
 import { formatDuration } from "@/lib/analytics";
+import {
+  PIPELINE_STEP_LABELS,
+  formatDurationMs,
+  type PipelineEventRow,
+} from "@/lib/call-pipeline-events";
 import {
   displayCheckoutStatus,
   formatCallStatus,
@@ -44,6 +50,49 @@ function DetailField({
         {label}
       </p>
       <div className="text-sm leading-relaxed text-foreground">{children}</div>
+    </div>
+  );
+}
+
+function PipelineWaterfall({ events }: { events: PipelineEventRow[] }) {
+  if (events.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        No pipeline events yet. Events appear when a call is queued or dispatched.
+      </p>
+    );
+  }
+
+  const totalMs = events.reduce((sum, event) => sum + (event.durationMs ?? 0), 0);
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">
+        Prep total {formatDurationMs(totalMs)}
+      </p>
+      <ol className="space-y-1.5">
+        {events.map((event) => {
+          const label =
+            PIPELINE_STEP_LABELS[event.step as keyof typeof PIPELINE_STEP_LABELS] ??
+            event.step.replace(/_/g, " ");
+          return (
+            <li
+              key={event.id}
+              className="flex items-baseline justify-between gap-3 text-sm"
+            >
+              <span className="min-w-0 truncate">
+                {label}
+                <span className="ml-1.5 text-xs text-muted-foreground">
+                  {event.status}
+                </span>
+              </span>
+              <span className="shrink-0 tabular-nums text-muted-foreground">
+                {formatDurationMs(event.durationMs)}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
@@ -141,6 +190,7 @@ export function CheckoutDetailDrawer({
   isStopping: boolean;
 }) {
   const [attempts, setAttempts] = useState<CallAttemptRow[]>([]);
+  const [pipelineEvents, setPipelineEvents] = useState<PipelineEventRow[]>([]);
   const [isLoadingAttempts, setIsLoadingAttempts] = useState(false);
   const [name, setName] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
@@ -157,9 +207,15 @@ export function CheckoutDetailDrawer({
 
     let active = true;
     setIsLoadingAttempts(true);
-    getCallAttemptsForCheckout(checkout.id)
-      .then((rows) => {
-        if (active) setAttempts(rows);
+    Promise.all([
+      getCallAttemptsForCheckout(checkout.id),
+      getPipelineEventsForCheckout(checkout.id),
+    ])
+      .then(([rows, events]) => {
+        if (active) {
+          setAttempts(rows);
+          setPipelineEvents(events);
+        }
       })
       .finally(() => {
         if (active) setIsLoadingAttempts(false);
@@ -196,7 +252,11 @@ export function CheckoutDetailDrawer({
   }
 
   const status = checkout
-    ? displayCheckoutStatus(checkout.callStatus, checkout.callScheduled)
+    ? displayCheckoutStatus(
+        checkout.callStatus,
+        checkout.callScheduled,
+        checkout.lastError
+      )
     : null;
   const lastFailure = sanitizeRecoveryError(
     checkout?.lastError || checkout?.latestAttempt?.failureReason,
@@ -387,6 +447,11 @@ export function CheckoutDetailDrawer({
                   </Button>
                 ) : null}
               </div>
+            </section>
+
+            <section className="space-y-3 border-t border-border pt-6">
+              <h3 className="text-sm font-semibold">Dispatch timeline</h3>
+              <PipelineWaterfall events={pipelineEvents} />
             </section>
 
             <section className="space-y-2 border-t border-border pt-6">
