@@ -16,6 +16,7 @@ const PREFETCH_MAIN = [
   "/dashboard/analytics",
   "/dashboard/recovery",
   "/dashboard/ndrc",
+  "/dashboard/logs",
   "/dashboard/billing",
   "/dashboard/onboarding",
   "/dashboard/team",

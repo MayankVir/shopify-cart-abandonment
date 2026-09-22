@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { guardStoreAccess, isCurrentUserAdmin } from "@/lib/store-access";
 
-export const INTEGRATION_EVENT_PAGE_SIZE = 50;
+const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
 export type IntegrationEventDirection = "all" | "inbound" | "poll";
@@ -98,7 +98,7 @@ export async function getIntegrationEvents(
   // multi-tenant deployment they could belong to any store — so they are only
   // exposed to admins.
   const includesUnmatched = await isCurrentUserAdmin();
-  const limit = Math.min(query.limit ?? INTEGRATION_EVENT_PAGE_SIZE, MAX_PAGE_SIZE);
+  const limit = Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
   const sources = sourceFilter(query.direction ?? "all");
   const search = query.search?.trim();
 

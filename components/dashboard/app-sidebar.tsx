@@ -7,6 +7,7 @@ import {
   CreditCard,
   FileSpreadsheet,
   Phone,
+  ScrollText,
   Settings,
   Shield,
   ShoppingCart,
@@ -42,6 +43,7 @@ const MAIN_NAV = [
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/dashboard/recovery", label: "Recovery", icon: ShoppingCart },
   { href: "/dashboard/ndrc", label: "NDRC", icon: Truck },
+  { href: "/dashboard/logs", label: "Logs", icon: ScrollText },
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
 ] as const;
 
