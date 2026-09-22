@@ -9,6 +9,10 @@ import {
 } from "@/lib/call-window";
 import { recordPipelineEvent } from "@/lib/call-pipeline-events";
 import { sanitizeRecoveryError } from "@/lib/recovery-error";
+import {
+  BUSY_TERMINAL_ERROR,
+  clampBusyRetryDelayMinutes,
+} from "@/lib/busy-retry";
 
 export const MAX_PRE_CALL_RETRIES = 3;
 export const MAX_TELEPHONY_RETRIES = 1;
@@ -23,6 +27,7 @@ export const TELEPHONY_RETRY_STATUSES: CallStatus[] = [
   CallStatus.BUSY,
   CallStatus.VOICEMAIL,
 ];
+
 
 export function sipConcurrencySlots(sipConcurrency: number): number {
   return Math.min(10, Math.max(1, sipConcurrency));
@@ -89,11 +94,15 @@ export async function maybeScheduleTelephonyRetry(params: {
   >;
   store: Store;
   status: CallStatus;
+  now?: Date;
 }): Promise<{ retried: boolean; scheduledCallAt: Date | null }> {
   if (!TELEPHONY_RETRY_STATUSES.includes(params.status)) {
     return { retried: false, scheduledCallAt: null };
   }
   if (!params.store.autoCallsEnabled || params.checkout.autoCallExcluded) {
+    return { retried: false, scheduledCallAt: null };
+  }
+  if (params.status === CallStatus.BUSY && !params.store.busyRetryEnabled) {
     return { retried: false, scheduledCallAt: null };
   }
 
@@ -107,17 +116,109 @@ export async function maybeScheduleTelephonyRetry(params: {
     return { retried: false, scheduledCallAt: null };
   }
 
-  const scheduledCallAt = nextWindowOpen(new Date(), callWindowFromStore(params.store));
+  const now = params.now ?? new Date();
+  const window = callWindowFromStore(params.store);
+  // Busy numbers are worth another try sooner than "tomorrow", so they use the
+  // merchant's configured delay; the rest wait for the next window opening.
+  const scheduledCallAt =
+    params.status === CallStatus.BUSY
+      ? busyRetryDueAt(now, params.store, now)
+      : nextWindowOpen(now, window);
+
   await db.abandonedCheckout.update({
     where: { id: params.checkout.id },
     data: {
       callStatus: CallStatus.PENDING,
       callScheduled: true,
       scheduledCallAt,
+      retryReason: params.status,
       lastError: `Retrying after ${params.status.replace(/_/g, " ").toLowerCase()}`,
     },
   });
   return { retried: true, scheduledCallAt };
+}
+
+/** When a busy call that failed at `failedAt` becomes due, never in the past. */
+function busyRetryDueAt(failedAt: Date, store: Store, now: Date): Date {
+  const delayMs = clampBusyRetryDelayMinutes(store.busyRetryDelayMinutes) * 60_000;
+  const due = new Date(
+    Math.max(now.getTime(), failedAt.getTime() + delayMs)
+  );
+  return clampToCallWindow(due, callWindowFromStore(store));
+}
+
+/**
+ * Turning busy retries off: rows waiting on a busy retry stop waiting and show
+ * their real outcome instead of a schedule that will never run.
+ */
+export async function cancelScheduledBusyRetries(
+  storeDomain: string
+): Promise<number> {
+  const { count } = await db.abandonedCheckout.updateMany({
+    where: {
+      storeDomain,
+      callStatus: CallStatus.PENDING,
+      retryReason: CallStatus.BUSY,
+    },
+    data: {
+      callStatus: CallStatus.BUSY,
+      callScheduled: false,
+      retryReason: null,
+      lastError: BUSY_TERMINAL_ERROR,
+    },
+  });
+  return count;
+}
+
+/**
+ * Turning busy retries on: rows that ended on a busy signal go back in the
+ * queue, due `busyRetryDelayMinutes` after they failed. Rows that already used
+ * their telephony retry, or that the merchant pulled out of automation, stay put.
+ */
+export async function rescheduleBusyFailures(
+  store: Store,
+  now: Date = new Date()
+): Promise<number> {
+  const candidates = await db.abandonedCheckout.findMany({
+    where: {
+      storeDomain: store.storeDomain,
+      callStatus: CallStatus.BUSY,
+      autoCallExcluded: false,
+      customerPhone: { not: "" },
+    },
+    select: { id: true, updatedAt: true },
+  });
+  if (candidates.length === 0) return 0;
+
+  const attemptCounts = await db.callAttempt.groupBy({
+    by: ["abandonedCheckoutId"],
+    where: {
+      abandonedCheckoutId: { in: candidates.map((row) => row.id) },
+      status: { in: TELEPHONY_RETRY_STATUSES },
+    },
+    _count: { _all: true },
+  });
+  const attemptsById = new Map(
+    attemptCounts.map((row) => [row.abandonedCheckoutId, row._count._all])
+  );
+
+  let rescheduled = 0;
+  for (const row of candidates) {
+    if ((attemptsById.get(row.id) ?? 0) > MAX_TELEPHONY_RETRIES) continue;
+
+    await db.abandonedCheckout.update({
+      where: { id: row.id },
+      data: {
+        callStatus: CallStatus.PENDING,
+        callScheduled: true,
+        scheduledCallAt: busyRetryDueAt(row.updatedAt, store, now),
+        retryReason: CallStatus.BUSY,
+        lastError: "Retrying after busy",
+      },
+    });
+    rescheduled++;
+  }
+  return rescheduled;
 }
 
 export async function deferOffWindowDueCalls(
@@ -157,6 +258,55 @@ export async function deferOffWindowDueCalls(
   return due.length;
 }
 
+/**
+ * A row stuck in PREPARING for this long never reached SIP dispatch (crashed or
+ * timed-out worker), so its concurrency slot is reclaimed.
+ */
+export const STALE_PREPARING_MS = 10 * 60 * 1000;
+
+/** Extra candidates read per claim so rows lost to a racing worker don't shrink the batch. */
+const CLAIM_OVERFETCH = 5;
+
+export async function requeueStalePreparingCalls(
+  store: Store,
+  now: Date = new Date()
+): Promise<number> {
+  const staleBefore = new Date(now.getTime() - STALE_PREPARING_MS);
+  const stale = {
+    storeDomain: store.storeDomain,
+    callStatus: CallStatus.PREPARING,
+    updatedAt: { lt: staleBefore },
+  };
+
+  // Rows the merchant took out of automation only get their slot back; they are
+  // not put on the wire again.
+  await db.abandonedCheckout.updateMany({
+    where: { ...stale, autoCallExcluded: true },
+    data: {
+      callStatus: CallStatus.DISPATCH_FAILED,
+      callScheduled: false,
+      lastError: "Dispatch stalled before the call was placed",
+    },
+  });
+
+  const { count } = await db.abandonedCheckout.updateMany({
+    where: { ...stale, autoCallExcluded: false },
+    data: {
+      callStatus: CallStatus.PENDING,
+      callScheduled: true,
+      scheduledCallAt: clampToCallWindow(now, callWindowFromStore(store)),
+      lastError: "Requeued after a stalled dispatch",
+    },
+  });
+  return count;
+}
+
+/**
+ * Takes up to `sipConcurrency` due rows out of the queue and marks them
+ * PREPARING so they occupy a concurrency slot for the whole dispatch, not just
+ * once the call is live. Claiming is a compare-and-swap per row, so two
+ * overlapping runs (cron plus a dashboard sync) can never claim the same row.
+ */
 export async function claimDueAutoCalls(
   store: Store,
   now: Date = new Date()
@@ -164,6 +314,7 @@ export async function claimDueAutoCalls(
   if (!store.autoCallsEnabled) return [];
 
   const window = callWindowFromStore(store);
+  await requeueStalePreparingCalls(store, now);
   await deferOffWindowDueCalls(store, now);
   if (!isInCallWindow(now, window)) return [];
 
@@ -177,7 +328,7 @@ export async function claimDueAutoCalls(
   const slots = Math.max(0, concurrency - inFlight);
   if (slots === 0) return [];
 
-  return db.abandonedCheckout.findMany({
+  const candidates = await db.abandonedCheckout.findMany({
     where: {
       storeDomain: store.storeDomain,
       callStatus: CallStatus.PENDING,
@@ -190,9 +341,60 @@ export async function claimDueAutoCalls(
       { shopifyCreatedAt: { sort: "asc", nulls: "last" } },
       { createdAt: "asc" },
     ],
-    take: slots,
+    take: slots + CLAIM_OVERFETCH,
+    select: { id: true },
+  });
+
+  const claimedIds: string[] = [];
+  for (const candidate of candidates) {
+    if (claimedIds.length >= slots) break;
+    const claim = await db.abandonedCheckout.updateMany({
+      where: {
+        id: candidate.id,
+        callStatus: CallStatus.PENDING,
+        callScheduled: true,
+      },
+      data: {
+        callStatus: CallStatus.PREPARING,
+        callScheduled: false,
+        retryReason: null,
+        lastError: null,
+      },
+    });
+    if (claim.count === 1) claimedIds.push(candidate.id);
+  }
+
+  if (claimedIds.length === 0) return [];
+
+  return db.abandonedCheckout.findMany({
+    where: { id: { in: claimedIds } },
+    orderBy: [
+      { scheduledCallAt: "asc" },
+      { shopifyCreatedAt: { sort: "asc", nulls: "last" } },
+      { createdAt: "asc" },
+    ],
     include: { store: true },
   });
+}
+
+/**
+ * Frees the slot held by a claimed row when the pipeline bailed without
+ * recording an outcome of its own. No-op once the pipeline has already moved
+ * the row to a failure status or scheduled a retry.
+ */
+export async function releaseClaimedCheckout(
+  checkoutId: string,
+  reason: string
+): Promise<boolean> {
+  const { count } = await db.abandonedCheckout.updateMany({
+    where: { id: checkoutId, callStatus: CallStatus.PREPARING },
+    data: {
+      callStatus: CallStatus.DISPATCH_FAILED,
+      callScheduled: false,
+      lastError: sanitizeRecoveryError(reason),
+    },
+  });
+  return count === 1;
 }
 
 export async function markQueueClaimed(
@@ -206,36 +408,42 @@ export async function markQueueClaimed(
   );
 }
 
+const ENROLLABLE_CALL_STATUSES: CallStatus[] = [
+  CallStatus.PENDING,
+  CallStatus.CART_CREATE_FAILED,
+  CallStatus.DRAFT_CREATE_FAILED,
+  CallStatus.ENRICH_FAILED,
+  CallStatus.DISPATCH_FAILED,
+];
+
 export async function enrollOpenCheckoutsForAutoCall(
   store: Store,
   now: Date = new Date()
 ): Promise<number> {
   const scheduledCallAt = clampToCallWindow(now, callWindowFromStore(store));
-  const result = await db.abandonedCheckout.updateMany({
+  const open = await db.abandonedCheckout.findMany({
     where: {
       storeDomain: store.storeDomain,
-      callStatus: {
-        notIn: [
-          CallStatus.COMPLETED,
-          CallStatus.NO_ANSWER,
-          CallStatus.BUSY,
-          CallStatus.INVALID_NUMBER,
-          CallStatus.HANG_UP,
-          CallStatus.VOICEMAIL,
-          CallStatus.PREPARING,
-          CallStatus.DISPATCHED,
-        ],
-      },
-      customerPhone: { not: "" },
-      autoCallExcluded: false,
+      callStatus: { in: ENROLLABLE_CALL_STATUSES },
     },
+    select: { id: true, customerPhone: true },
+  });
+  const ids = open
+    .filter((row) => row.customerPhone.trim().length > 0)
+    .map((row) => row.id);
+
+  if (ids.length === 0) return 0;
+
+  await db.abandonedCheckout.updateMany({
+    where: { id: { in: ids } },
     data: {
       callScheduled: true,
       scheduledCallAt,
       callStatus: CallStatus.PENDING,
+      autoCallExcluded: false,
     },
   });
-  return result.count;
+  return ids.length;
 }
 
 export async function unschedulePendingAutoCalls(storeDomain: string): Promise<void> {

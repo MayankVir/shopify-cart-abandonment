@@ -13,6 +13,7 @@ export const PIPELINE_STEPS = [
   "repeat_customer",
   "sip_dispatch",
   "sip_acked",
+  "reconciled",
 ] as const;
 
 export type PipelineStep = (typeof PIPELINE_STEPS)[number];
@@ -37,6 +38,7 @@ export const PIPELINE_STEP_LABELS: Record<PipelineStep, string> = {
   repeat_customer: "Repeat-customer lookup",
   sip_dispatch: "SIP dispatch",
   sip_acked: "SIP acknowledged",
+  reconciled: "Resolved from session poll",
 };
 
 export interface PipelineEventContext {

@@ -11,6 +11,16 @@ import {
   isAbandonedCheckoutAccessError,
   missingScopesMessage,
 } from "./shopify-errors";
+import {
+  bucketRefillMs,
+  isRetryableHttpStatus,
+  isThrottledGraphqlError,
+  parseRetryAfterMs,
+  retryDelayMs,
+  SHOPIFY_MAX_ATTEMPTS,
+  sleep,
+  type ShopifyCostExtension,
+} from "./shopify-retry";
 
 const ADMIN_API_VERSION = "2024-10";
 
@@ -177,39 +187,87 @@ export async function adminGraphql<T>(
   variables?: Record<string, unknown>
 ): Promise<T> {
   const token = resolveAdminToken(adminAccessToken);
-  const response = await fetch(
-    `https://${storeDomain}/admin/api/${ADMIN_API_VERSION}/graphql.json`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": token,
-      },
-      body: JSON.stringify({ query, variables }),
-    }
-  );
+  let lastError = new Error("Shopify Admin API request was not attempted");
+  let delayMs = 0;
 
-  if (!response.ok) {
-    throw new Error(
-      `Shopify Admin API error: ${response.status} ${response.statusText}`
+  for (let attempt = 0; attempt < SHOPIFY_MAX_ATTEMPTS; attempt++) {
+    if (delayMs > 0) await sleep(delayMs);
+
+    const response = await fetch(
+      `https://${storeDomain}/admin/api/${ADMIN_API_VERSION}/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopify-Access-Token": token,
+        },
+        body: JSON.stringify({ query, variables }),
+      }
     );
+
+    if (isRetryableHttpStatus(response.status)) {
+      lastError = new Error(
+        `Shopify Admin API error: ${response.status} ${response.statusText}`
+      );
+      delayMs = retryDelayMs(attempt, {
+        retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")),
+      });
+      console.warn(
+        "[shopify-admin] retrying",
+        JSON.stringify({
+          storeDomain,
+          status: response.status,
+          attempt: attempt + 1,
+          delayMs,
+        })
+      );
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Shopify Admin API error: ${response.status} ${response.statusText}`
+      );
+    }
+
+    const json = (await response.json()) as {
+      data?: T;
+      errors?: Array<{ message: string; extensions?: { code?: string } }>;
+      extensions?: { cost?: ShopifyCostExtension };
+    };
+
+    if (json.errors?.length) {
+      const raw = json.errors.map((e) => e.message).join(", ");
+
+      // Throttling is transient: wait for the shop's bucket to refill.
+      if (isThrottledGraphqlError(json.errors)) {
+        lastError = new Error(formatShopifyAccessError(raw));
+        delayMs = retryDelayMs(attempt, {
+          refillMs: bucketRefillMs(json.extensions?.cost),
+        });
+        console.warn(
+          "[shopify-admin] throttled",
+          JSON.stringify({
+            storeDomain,
+            attempt: attempt + 1,
+            delayMs,
+            throttleStatus: json.extensions?.cost?.throttleStatus,
+          })
+        );
+        continue;
+      }
+
+      throw new Error(formatShopifyAccessError(raw));
+    }
+
+    if (!json.data) {
+      throw new Error("Empty response from Shopify Admin API");
+    }
+
+    return json.data;
   }
 
-  const json = (await response.json()) as {
-    data?: T;
-    errors?: Array<{ message: string }>;
-  };
-
-  if (json.errors?.length) {
-    const raw = json.errors.map((e) => e.message).join(", ");
-    throw new Error(formatShopifyAccessError(raw));
-  }
-
-  if (!json.data) {
-    throw new Error("Empty response from Shopify Admin API");
-  }
-
-  return json.data;
+  throw lastError;
 }
 
 export async function fetchGrantedAdminScopes(

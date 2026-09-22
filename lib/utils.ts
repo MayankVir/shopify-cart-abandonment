@@ -24,6 +24,44 @@ export function formatShortUrl(url: string, maxLength = 48): string {
   }
 }
 
+/** Spelled out here because `month: "short"` gives "Sep" in most locales. */
+const MONTH_LABELS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sept",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+/** "22 Sept 2026" */
+export function formatDateLabel(value: Date | string): string {
+  const date = typeof value === "string" ? new Date(value) : value;
+  return `${date.getDate()} ${MONTH_LABELS[date.getMonth()]} ${date.getFullYear()}`;
+}
+
+/** "04:50 PM" */
+export function formatTimeLabel(value: Date | string): string {
+  const date = typeof value === "string" ? new Date(value) : value;
+  return date.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+/** "22 Sept 2026, 04:50 PM" */
+export function formatDateTimeLabel(value: Date | string): string {
+  const date = typeof value === "string" ? new Date(value) : value;
+  return `${formatDateLabel(date)}, ${formatTimeLabel(date)}`;
+}
+
 export function formatPhoneNumber(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   if (digits.length === 10) {

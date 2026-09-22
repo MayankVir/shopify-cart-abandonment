@@ -2,7 +2,14 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import {
+  CalendarClock,
+  ClipboardList,
+  Database,
+  Loader2,
+  PhoneCall,
+  type LucideIcon,
+} from "lucide-react";
 import {
   CHECKOUT_SYNC_MODES,
   type CheckoutSyncModeValue,
@@ -13,11 +20,18 @@ import {
 } from "@/lib/sheet-sync-direction";
 import {
   getStoreRecoverySettings,
+  updateStoreBusyRetrySettings,
   updateStoreCallFeedbackSettings,
   updateStoreRecoverySettings,
   updateStoreRepeatCustomerSettings,
   updateStoreSheetSettings,
 } from "@/app/actions/abandoned-checkouts";
+import {
+  DEFAULT_BUSY_RETRY_DELAY_MINUTES,
+  joinRetryDelay,
+  splitRetryDelay,
+  type RetryDelayUnit,
+} from "@/lib/busy-retry";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -67,6 +81,8 @@ export type RecoverySettingsPatch = Pick<
   | "callWindowStartMinute"
   | "callWindowEndMinute"
   | "ianaTimezoneOverride"
+  | "busyRetryEnabled"
+  | "busyRetryDelayMinutes"
 >;
 
 interface RecoverySettingsProps {
@@ -77,6 +93,40 @@ interface RecoverySettingsProps {
   onOpenChange: (open: boolean) => void;
   onSettingsChange?: (patch: RecoverySettingsPatch) => void;
 }
+
+const SETTINGS_SECTIONS = [
+  {
+    id: "source",
+    label: "Source",
+    icon: Database,
+    description: "Where abandoned checkouts are pulled from.",
+  },
+  {
+    id: "calling",
+    label: "Calling",
+    icon: PhoneCall,
+    description: "How recovery calls are dispatched.",
+  },
+  {
+    id: "schedule",
+    label: "Schedule",
+    icon: CalendarClock,
+    description: "The hours calls are allowed to run.",
+  },
+  {
+    id: "follow-up",
+    label: "Follow-up",
+    icon: ClipboardList,
+    description: "Optional enrichment and write-back.",
+  },
+] as const satisfies ReadonlyArray<{
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  description: string;
+}>;
+
+type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]["id"];
 
 function syncModeFromSettings(
   mode: StoreRecoverySettings["checkoutSyncMode"]
@@ -116,6 +166,13 @@ export function RecoverySettings({
     useState(false);
   const [repeatCustomerWindowDays, setRepeatCustomerWindowDays] =
     useState(180);
+  const [busyRetryEnabled, setBusyRetryEnabled] = useState(true);
+  const [busyRetryValue, setBusyRetryValue] = useState(
+    () => splitRetryDelay(DEFAULT_BUSY_RETRY_DELAY_MINUTES).value
+  );
+  const [busyRetryUnit, setBusyRetryUnit] = useState<RetryDelayUnit>(
+    () => splitRetryDelay(DEFAULT_BUSY_RETRY_DELAY_MINUTES).unit
+  );
   const [callWindowEnabled, setCallWindowEnabled] = useState(true);
   const [windowStart, setWindowStart] = useState(
     minutesToTimeInput(DEFAULT_CALL_WINDOW_START_MINUTE)
@@ -124,10 +181,17 @@ export function RecoverySettings({
     minutesToTimeInput(DEFAULT_CALL_WINDOW_END_MINUTE)
   );
   const [timezoneOverride, setTimezoneOverride] = useState("shopify");
+  const [activeSection, setActiveSection] =
+    useState<SettingsSectionId>("source");
   const [isPending, startSave] = useTransition();
   const ttaiConfigured = Boolean(
     settings?.ttaiScenarioId && settings?.ttaiTrunkId
   );
+
+  useEffect(() => {
+    if (!open) return;
+    setActiveSection("source");
+  }, [open]);
 
   useEffect(() => {
     if (!open || !settings) return;
@@ -147,6 +211,12 @@ export function RecoverySettings({
     setRepeatCustomerCheckEnabled(settings.repeatCustomerCheckEnabled ?? false);
     setRepeatCustomerWindowDays(settings.repeatCustomerWindowDays || 180);
     setCheckoutSyncMode(syncModeFromSettings(settings.checkoutSyncMode));
+    setBusyRetryEnabled(settings.busyRetryEnabled ?? true);
+    const busyDelay = splitRetryDelay(
+      settings.busyRetryDelayMinutes ?? DEFAULT_BUSY_RETRY_DELAY_MINUTES
+    );
+    setBusyRetryValue(busyDelay.value);
+    setBusyRetryUnit(busyDelay.unit);
     setCallWindowEnabled(settings.callWindowEnabled ?? true);
     setWindowStart(
       minutesToTimeInput(
@@ -217,6 +287,19 @@ export function RecoverySettings({
         return;
       }
 
+      const busyRetryDelayMinutes = joinRetryDelay(
+        busyRetryValue,
+        busyRetryUnit
+      );
+      const busyRetry = await updateStoreBusyRetrySettings(storeDomain, {
+        busyRetryEnabled,
+        busyRetryDelayMinutes,
+      });
+      if (!busyRetry.success) {
+        toast.error(busyRetry.error ?? "Failed to save busy-retry settings");
+        return;
+      }
+
       onSettingsChange?.({
         callDelayMinutes,
         sipConcurrency,
@@ -240,309 +323,435 @@ export function RecoverySettings({
         ),
         ianaTimezoneOverride:
           timezoneOverride === "shopify" ? "" : timezoneOverride,
+        busyRetryEnabled,
+        busyRetryDelayMinutes,
       });
 
-      toast.success("Settings saved");
+      if (busyRetry.cancelled) {
+        toast.success(
+          `Settings saved · ${busyRetry.cancelled} busy retry(s) marked as failed`
+        );
+      } else if (busyRetry.rescheduled) {
+        toast.success(
+          `Settings saved · ${busyRetry.rescheduled} busy call(s) re-queued`
+        );
+      } else {
+        toast.success("Settings saved");
+      }
       onOpenChange(false);
     });
   }
 
   const showLoading = open && !settingsReady;
+  const activeMeta =
+    SETTINGS_SECTIONS.find((section) => section.id === activeSection) ??
+    SETTINGS_SECTIONS[0];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 overflow-visible p-0 sm:max-w-xl">
+      <DialogContent className="max-h-[90vh] gap-0 overflow-hidden p-0 sm:max-w-3xl">
         <DialogHeader className="border-b border-border px-5 py-3 pr-12">
           <DialogTitle>Checkout recovery</DialogTitle>
           <DialogDescription className="sr-only">
-            Source, calling, and optional follow-up for this store.
+            Source, calling, schedule, and follow-up settings for this store.
           </DialogDescription>
         </DialogHeader>
 
         {showLoading ? (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+          <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading settings…
           </div>
         ) : (
-          <form
-            id="recovery-settings-form"
-            onSubmit={handleSave}
-            className="space-y-3 px-5 py-4"
-          >
-            <SettingsPanel title="Source">
-              <Field
-                className="col-span-2"
-                label="Checkout source"
-                htmlFor="checkout-sync-mode"
-              >
-                <Select
-                  value={checkoutSyncMode}
-                  onValueChange={(value) =>
-                    setCheckoutSyncMode(value as CheckoutSyncModeValue)
-                  }
+          <div className="grid sm:grid-cols-[13rem_1fr]">
+            <nav
+              aria-label="Recovery settings sections"
+              className="flex gap-1 overflow-x-auto border-b border-border bg-muted/30 p-2 sm:flex-col sm:overflow-x-visible sm:border-b-0 sm:border-r"
+            >
+              {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-current={activeSection === id ? "page" : undefined}
+                  onClick={() => setActiveSection(id)}
+                  className={cn(
+                    "flex shrink-0 items-center gap-2 rounded-md px-2.5 py-2 text-sm font-medium transition-colors sm:w-full",
+                    activeSection === id
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                  )}
                 >
-                  <SelectTrigger id="checkout-sync-mode" className="h-8">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={CHECKOUT_SYNC_MODES.SHEET}>
-                      Google Sheet (plugin)
-                    </SelectItem>
-                    <SelectItem value={CHECKOUT_SYNC_MODES.POLLING}>
-                      Shopify Admin API poll
-                    </SelectItem>
-                    <SelectItem value={CHECKOUT_SYNC_MODES.WEBHOOK}>
-                      Shopify webhook
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {label}
+                </button>
+              ))}
+            </nav>
 
-              {checkoutSyncMode === CHECKOUT_SYNC_MODES.SHEET && (
-                <>
-                  <Field label="Sheet URL" htmlFor="sheet-url">
-                    <Input
-                      id="sheet-url"
-                      className="h-8"
-                      type="url"
-                      value={sheetUrl}
-                      onChange={(e) => setSheetUrl(e.target.value)}
-                      placeholder="https://docs.google.com/spreadsheets/d/…"
-                    />
-                  </Field>
-                  <Field label="Read order" htmlFor="sheet-sync-direction">
-                    <Select
-                      value={sheetSyncDirection}
-                      onValueChange={(value) =>
-                        setSheetSyncDirection(value as SheetSyncDirectionValue)
-                      }
-                    >
-                      <SelectTrigger id="sheet-sync-direction" className="h-8">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={SHEET_SYNC_DIRECTIONS.BOTTOM}>
-                          Newest first
-                        </SelectItem>
-                        <SelectItem value={SHEET_SYNC_DIRECTIONS.TOP}>
-                          Oldest first
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                </>
-              )}
-            </SettingsPanel>
+            <form
+              id="recovery-settings-form"
+              onSubmit={handleSave}
+              className="max-h-[60vh] min-h-[22rem] overflow-y-auto px-5 py-4"
+            >
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold">{activeMeta.label}</h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {activeMeta.description}
+                </p>
+              </div>
 
-            <SettingsPanel title="Calling">
-              <ToggleRow
-                id="auto-calls"
-                label="Automated calling"
-                checked={autoCallsEnabled}
-                onCheckedChange={setAutoCallsEnabled}
-              />
-              <Field label="Delay (min)" htmlFor="call-delay">
-                <Input
-                  id="call-delay"
-                  className="h-8"
-                  type="number"
-                  min={1}
-                  max={1440}
-                  value={callDelayMinutes}
-                  onChange={(e) => setCallDelayMinutes(Number(e.target.value))}
-                />
-              </Field>
-              <Field label="Live calls" htmlFor="sip-concurrency">
-                <Input
-                  id="sip-concurrency"
-                  className="h-8"
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={sipConcurrency}
-                  onChange={(e) => setSipConcurrency(Number(e.target.value))}
-                />
-              </Field>
-              <ToggleRow
-                id="call-window"
-                label="9am–9pm window"
-                checked={callWindowEnabled}
-                onCheckedChange={setCallWindowEnabled}
-              />
-              {callWindowEnabled ? (
-                <>
-                  <Field label="Window start" htmlFor="call-window-start">
-                    <Input
-                      id="call-window-start"
-                      className="h-8"
-                      type="time"
-                      value={windowStart}
-                      onChange={(e) => setWindowStart(e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Window end" htmlFor="call-window-end">
-                    <Input
-                      id="call-window-end"
-                      className="h-8"
-                      type="time"
-                      value={windowEnd}
-                      onChange={(e) => setWindowEnd(e.target.value)}
-                    />
-                  </Field>
+              {activeSection === "source" && (
+                <SectionGrid>
                   <Field
                     className="col-span-2"
-                    label="Timezone"
-                    htmlFor="call-timezone"
+                    label="Checkout source"
+                    htmlFor="checkout-sync-mode"
                   >
                     <Select
-                      value={timezoneOverride}
-                      onValueChange={setTimezoneOverride}
+                      value={checkoutSyncMode}
+                      onValueChange={(value) =>
+                        setCheckoutSyncMode(value as CheckoutSyncModeValue)
+                      }
                     >
-                      <SelectTrigger id="call-timezone" className="h-8">
+                      <SelectTrigger id="checkout-sync-mode" className="h-8">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="shopify">
-                          Shopify ({settings?.ianaTimezone || "Asia/Kolkata"})
+                        <SelectItem value={CHECKOUT_SYNC_MODES.SHEET}>
+                          Google Sheet (plugin)
                         </SelectItem>
-                        {timezoneOverride !== "shopify" &&
-                        !(COMMON_IANA_TIMEZONES as readonly string[]).includes(
-                          timezoneOverride
-                        ) ? (
-                          <SelectItem value={timezoneOverride}>
-                            {timezoneOverride}
-                          </SelectItem>
-                        ) : null}
-                        {COMMON_IANA_TIMEZONES.map((zone) => (
-                          <SelectItem key={zone} value={zone}>
-                            {zone}
-                          </SelectItem>
-                        ))}
+                        <SelectItem value={CHECKOUT_SYNC_MODES.POLLING}>
+                          Shopify Admin API poll
+                        </SelectItem>
+                        <SelectItem value={CHECKOUT_SYNC_MODES.WEBHOOK}>
+                          Shopify webhook
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                   </Field>
-                </>
-              ) : null}
-            </SettingsPanel>
 
-            <SettingsPanel title="Optional">
-              <ToggleRow
-                id="call-feedback-sheet"
-                label="Write feedback to sheet"
-                checked={callFeedbackSheetEnabled}
-                onCheckedChange={setCallFeedbackSheetEnabled}
-              />
-              {callFeedbackSheetEnabled && (
-                <>
-                  <Field
-                    label="Feedback sheet"
-                    htmlFor="call-feedback-sheet-url"
-                  >
-                    <Input
-                      id="call-feedback-sheet-url"
-                      className="h-8"
-                      type="url"
-                      value={callFeedbackSheetUrl}
-                      onChange={(e) =>
-                        setCallFeedbackSheetUrl(e.target.value)
-                      }
-                      placeholder="Reuse checkout sheet if blank"
-                    />
-                  </Field>
-                  <Field
-                    label="Key column"
-                    htmlFor="call-feedback-key-column"
-                  >
-                    <Input
-                      id="call-feedback-key-column"
-                      className="h-8"
-                      value={callFeedbackKeyColumn}
-                      onChange={(e) =>
-                        setCallFeedbackKeyColumn(e.target.value)
-                      }
-                      placeholder="request_id"
-                    />
-                  </Field>
-                </>
+                  {checkoutSyncMode === CHECKOUT_SYNC_MODES.SHEET && (
+                    <>
+                      <Field label="Sheet URL" htmlFor="sheet-url">
+                        <Input
+                          id="sheet-url"
+                          className="h-8"
+                          type="url"
+                          value={sheetUrl}
+                          onChange={(e) => setSheetUrl(e.target.value)}
+                          placeholder="https://docs.google.com/spreadsheets/d/…"
+                        />
+                      </Field>
+                      <Field label="Read order" htmlFor="sheet-sync-direction">
+                        <Select
+                          value={sheetSyncDirection}
+                          onValueChange={(value) =>
+                            setSheetSyncDirection(
+                              value as SheetSyncDirectionValue
+                            )
+                          }
+                        >
+                          <SelectTrigger
+                            id="sheet-sync-direction"
+                            className="h-8"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={SHEET_SYNC_DIRECTIONS.BOTTOM}>
+                              Newest first
+                            </SelectItem>
+                            <SelectItem value={SHEET_SYNC_DIRECTIONS.TOP}>
+                              Oldest first
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                    </>
+                  )}
+                </SectionGrid>
               )}
-              <ToggleRow
-                id="repeat-customer-check"
-                label="Flag repeat customers"
-                checked={repeatCustomerCheckEnabled}
-                onCheckedChange={setRepeatCustomerCheckEnabled}
-              >
-                {repeatCustomerCheckEnabled ? (
-                  <Input
-                    id="repeat-customer-window"
-                    className="h-8 w-20"
-                    type="number"
-                    min={1}
-                    max={3650}
-                    value={repeatCustomerWindowDays}
-                    onChange={(e) =>
-                      setRepeatCustomerWindowDays(Number(e.target.value))
-                    }
-                    aria-label="Lookback days"
-                  />
-                ) : null}
-              </ToggleRow>
-            </SettingsPanel>
 
-            {!ttaiConfigured && (
-              <p className="text-xs text-amber-800 dark:text-amber-200">
-                TTAI scenario and trunk are not set. Configure them in Admin
-                before dispatching calls.
-              </p>
-            )}
-          </form>
+              {activeSection === "calling" && (
+                <SectionGrid>
+                  <ToggleRow
+                    id="auto-calls"
+                    label="Automated calling"
+                    checked={autoCallsEnabled}
+                    onCheckedChange={setAutoCallsEnabled}
+                  />
+                  <Field label="Delay (min)" htmlFor="call-delay">
+                    <Input
+                      id="call-delay"
+                      className="h-8"
+                      type="number"
+                      min={1}
+                      max={1440}
+                      value={callDelayMinutes}
+                      onChange={(e) =>
+                        setCallDelayMinutes(Number(e.target.value))
+                      }
+                    />
+                  </Field>
+                  <Field label="Live calls" htmlFor="sip-concurrency">
+                    <Input
+                      id="sip-concurrency"
+                      className="h-8"
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={sipConcurrency}
+                      onChange={(e) => setSipConcurrency(Number(e.target.value))}
+                    />
+                  </Field>
+                  <p className="col-span-2 text-xs text-muted-foreground">
+                    Delay is measured from abandonment. Live calls caps how many
+                    calls run at once per store.
+                  </p>
+
+                  <ToggleRow
+                    id="busy-retry"
+                    label="Retry busy numbers"
+                    checked={busyRetryEnabled}
+                    onCheckedChange={setBusyRetryEnabled}
+                  />
+                  {busyRetryEnabled ? (
+                    <>
+                      <Field label="Retry after" htmlFor="busy-retry-value">
+                        <Input
+                          id="busy-retry-value"
+                          className="h-8"
+                          type="number"
+                          min={1}
+                          max={busyRetryUnit === "days" ? 14 : 336}
+                          value={busyRetryValue}
+                          onChange={(e) =>
+                            setBusyRetryValue(Number(e.target.value))
+                          }
+                        />
+                      </Field>
+                      <Field label="Unit" htmlFor="busy-retry-unit">
+                        <Select
+                          value={busyRetryUnit}
+                          onValueChange={(value) =>
+                            setBusyRetryUnit(value as RetryDelayUnit)
+                          }
+                        >
+                          <SelectTrigger id="busy-retry-unit" className="h-8">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="hours">Hours</SelectItem>
+                            <SelectItem value="days">Days</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <p className="col-span-2 text-xs text-muted-foreground">
+                        A busy number is called once more after this wait,
+                        clamped to the calling window. Turning this off settles
+                        every pending busy retry as “Call failed - Busy”.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="col-span-2 text-xs text-muted-foreground">
+                      Busy calls stop after the first attempt. Turning this back
+                      on re-queues calls that ended on a busy signal.
+                    </p>
+                  )}
+                </SectionGrid>
+              )}
+
+              {activeSection === "schedule" && (
+                <SectionGrid>
+                  <ToggleRow
+                    id="call-window"
+                    label="Restrict to calling window"
+                    checked={callWindowEnabled}
+                    onCheckedChange={setCallWindowEnabled}
+                  />
+                  {callWindowEnabled ? (
+                    <>
+                      <Field label="Window start" htmlFor="call-window-start">
+                        <Input
+                          id="call-window-start"
+                          className="h-8"
+                          type="time"
+                          value={windowStart}
+                          onChange={(e) => setWindowStart(e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Window end" htmlFor="call-window-end">
+                        <Input
+                          id="call-window-end"
+                          className="h-8"
+                          type="time"
+                          value={windowEnd}
+                          onChange={(e) => setWindowEnd(e.target.value)}
+                        />
+                      </Field>
+                      <Field
+                        className="col-span-2"
+                        label="Timezone"
+                        htmlFor="call-timezone"
+                      >
+                        <Select
+                          value={timezoneOverride}
+                          onValueChange={setTimezoneOverride}
+                        >
+                          <SelectTrigger id="call-timezone" className="h-8">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="shopify">
+                              Shopify ({settings?.ianaTimezone || "Asia/Kolkata"})
+                            </SelectItem>
+                            {timezoneOverride !== "shopify" &&
+                            !(
+                              COMMON_IANA_TIMEZONES as readonly string[]
+                            ).includes(timezoneOverride) ? (
+                              <SelectItem value={timezoneOverride}>
+                                {timezoneOverride}
+                              </SelectItem>
+                            ) : null}
+                            {COMMON_IANA_TIMEZONES.map((zone) => (
+                              <SelectItem key={zone} value={zone}>
+                                {zone}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <p className="col-span-2 text-xs text-muted-foreground">
+                        Calls scheduled outside this window move to the next
+                        window opening, keeping their queue order.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="col-span-2 text-xs text-muted-foreground">
+                      Auto-calls can be dispatched at any hour, including
+                      overnight.
+                    </p>
+                  )}
+                </SectionGrid>
+              )}
+
+              {activeSection === "follow-up" && (
+                <SectionGrid>
+                  <ToggleRow
+                    id="call-feedback-sheet"
+                    label="Write feedback to sheet"
+                    checked={callFeedbackSheetEnabled}
+                    onCheckedChange={setCallFeedbackSheetEnabled}
+                  />
+                  {callFeedbackSheetEnabled && (
+                    <>
+                      <Field
+                        label="Feedback sheet"
+                        htmlFor="call-feedback-sheet-url"
+                      >
+                        <Input
+                          id="call-feedback-sheet-url"
+                          className="h-8"
+                          type="url"
+                          value={callFeedbackSheetUrl}
+                          onChange={(e) =>
+                            setCallFeedbackSheetUrl(e.target.value)
+                          }
+                          placeholder="Reuse checkout sheet if blank"
+                        />
+                      </Field>
+                      <Field
+                        label="Key column"
+                        htmlFor="call-feedback-key-column"
+                      >
+                        <Input
+                          id="call-feedback-key-column"
+                          className="h-8"
+                          value={callFeedbackKeyColumn}
+                          onChange={(e) =>
+                            setCallFeedbackKeyColumn(e.target.value)
+                          }
+                          placeholder="request_id"
+                        />
+                      </Field>
+                    </>
+                  )}
+                  <ToggleRow
+                    id="repeat-customer-check"
+                    label="Flag repeat customers"
+                    checked={repeatCustomerCheckEnabled}
+                    onCheckedChange={setRepeatCustomerCheckEnabled}
+                  >
+                    {repeatCustomerCheckEnabled ? (
+                      <Input
+                        id="repeat-customer-window"
+                        className="h-8 w-20"
+                        type="number"
+                        min={1}
+                        max={3650}
+                        value={repeatCustomerWindowDays}
+                        onChange={(e) =>
+                          setRepeatCustomerWindowDays(Number(e.target.value))
+                        }
+                        aria-label="Lookback days"
+                      />
+                    ) : null}
+                  </ToggleRow>
+                  {repeatCustomerCheckEnabled ? (
+                    <p className="col-span-2 text-xs text-muted-foreground">
+                      Looks back this many days of Shopify orders for the
+                      customer&apos;s phone number before each call.
+                    </p>
+                  ) : null}
+                </SectionGrid>
+              )}
+            </form>
+          </div>
         )}
 
-        <DialogFooter className="border-t border-border px-5 py-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            disabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            size="sm"
-            form="recovery-settings-form"
-            disabled={isPending || showLoading}
-          >
-            {isPending ? (
-              <>
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                Saving…
-              </>
-            ) : (
-              "Save settings"
-            )}
-          </Button>
+        <DialogFooter className="items-center gap-3 border-t border-border px-5 py-3 sm:justify-between">
+          {ttaiConfigured ? (
+            <span className="hidden sm:block" />
+          ) : (
+            <p className="text-xs text-amber-800 dark:text-amber-200">
+              TTAI scenario and trunk are not set. Configure them in Admin
+              before dispatching calls.
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+              disabled={isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              form="recovery-settings-form"
+              disabled={isPending || showLoading}
+            >
+              {isPending ? (
+                <>
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                "Save settings"
+              )}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function SettingsPanel({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
+function SectionGrid({ children }: { children: React.ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-lg border border-border">
-      <h3 className="border-b border-border bg-muted/50 px-3 py-2 text-sm font-semibold">
-        {title}
-      </h3>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 p-3">{children}</div>
-    </section>
+    <div className="grid grid-cols-2 gap-x-3 gap-y-3">{children}</div>
   );
 }
 

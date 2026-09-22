@@ -80,8 +80,28 @@ export interface TtaiImprovementResults {
   resources?: string;
 }
 
+/**
+ * Telephony-level outcome from the sessions API. This is the only trustworthy
+ * failure signal: a failed dial still reports a session-level `status` of
+ * "completed", and no analysis/extraction webhook is ever emitted for it
+ * because there is no transcript to analyse.
+ */
+export interface TtaiBotInfo {
+  call_type?: string;
+  /** "failed" for a dial that never connected. */
+  status?: string;
+  phone_number?: string;
+  scheduled_ts?: string;
+  bot_joined_at?: string | null;
+  call_ended_at?: string | null;
+  error_message?: string | null;
+  /** busy | no_answer | … — maps through mapTtaiStatusToCallStatus. */
+  call_failure_reason?: string | null;
+}
+
 export interface TtaiSessionDetails {
   id: string;
+  bot_info?: TtaiBotInfo | null;
   scenario_id?: string;
   scenario_name?: string;
   created_at?: string;

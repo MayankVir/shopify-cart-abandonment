@@ -31,9 +31,11 @@ import {
 import {
   claimDueAutoCalls,
   markQueueClaimed,
+  releaseClaimedCheckout,
   schedulePreCallRetry,
   sipConcurrencySlots,
 } from "@/lib/call-queue";
+import { reconcileStuckDispatchedCalls } from "@/lib/call-reconcile";
 
 export type RecoveryTrigger = "manual" | "auto";
 
@@ -128,7 +130,8 @@ async function persistCheckoutError(checkoutId: string, reason: string) {
 
 export async function runRecoveryCallPipeline(
   checkout: AbandonedCheckout & { store: Store },
-  trigger: RecoveryTrigger
+  trigger: RecoveryTrigger,
+  options: { preClaimed?: boolean } = {}
 ): Promise<RecoveryPipelineResult> {
   const pipelineStartedAt = Date.now();
   const ctx: PipelineEventContext = {
@@ -147,8 +150,9 @@ export async function runRecoveryCallPipeline(
   }
 
   if (
-    checkout.callStatus === CallStatus.DISPATCHED ||
-    checkout.callStatus === CallStatus.PREPARING
+    !options.preClaimed &&
+    (checkout.callStatus === CallStatus.DISPATCHED ||
+      checkout.callStatus === CallStatus.PREPARING)
   ) {
     const error = "Call already in progress";
     await validateStep.fail(error);
@@ -187,6 +191,7 @@ export async function runRecoveryCallPipeline(
     data: {
       callStatus: CallStatus.PREPARING,
       customerPhone: phone,
+      retryReason: null,
       lastError: null,
     },
   });
@@ -593,18 +598,84 @@ export async function stopRecoveryCall(
   return { success: true };
 }
 
+interface DispatchFailure {
+  checkoutId: string;
+  checkoutToken: string;
+  error: string;
+}
+
+async function dispatchClaimedCheckout(
+  checkout: AbandonedCheckout & { store: Store },
+  storeDomain: string
+): Promise<DispatchFailure | null> {
+  const ctx: PipelineEventContext = {
+    checkoutId: checkout.id,
+    storeDomain,
+    trigger: "auto",
+  };
+
+  try {
+    await recordPipelineEvent(ctx, "queued", "succeeded");
+    await markQueueClaimed(checkout, "auto");
+
+    const result = await runRecoveryCallPipeline(checkout, "auto", {
+      preClaimed: true,
+    });
+    if (result.success) return null;
+
+    const failure: DispatchFailure = {
+      checkoutId: checkout.id,
+      checkoutToken: checkout.checkoutToken,
+      error: sanitizeRecoveryError(result.error ?? "Unknown dispatch failure"),
+    };
+    await releaseClaimedCheckout(checkout.id, failure.error);
+    console.warn(
+      "[process-calls] dispatch failed",
+      JSON.stringify({
+        storeDomain,
+        ...failure,
+        dispatchDurationMs: result.dispatchDurationMs,
+      })
+    );
+    return failure;
+  } catch (error) {
+    const failure: DispatchFailure = {
+      checkoutId: checkout.id,
+      checkoutToken: checkout.checkoutToken,
+      error: sanitizeRecoveryError(
+        error instanceof Error ? error.message : "Dispatch threw"
+      ),
+    };
+    await releaseClaimedCheckout(checkout.id, failure.error);
+    console.error(
+      "[process-calls] dispatch threw",
+      JSON.stringify({ storeDomain, ...failure })
+    );
+    return failure;
+  }
+}
+
 export async function processScheduledCallsForStore(storeDomain: string): Promise<{
   processed: number;
   errors: number;
-  dispatchFailures: Array<{
-    checkoutId: string;
-    checkoutToken: string;
-    error: string;
-  }>;
+  dispatchFailures: DispatchFailure[];
 }> {
   const empty = { processed: 0, errors: 0, dispatchFailures: [] };
   const store = await db.store.findUnique({ where: { storeDomain } });
-  if (!store?.autoCallsEnabled) return empty;
+  if (!store) return empty;
+
+  // Failed dials never emit an analysis webhook, so their attempts are polled
+  // and closed out here — before free slots are counted, and regardless of
+  // whether auto-calls are currently on.
+  const reconciled = await reconcileStuckDispatchedCalls(store);
+  if (reconciled.checked > 0) {
+    console.info(
+      "[process-calls] reconcile",
+      JSON.stringify({ storeDomain, ...reconciled })
+    );
+  }
+
+  if (!store.autoCallsEnabled) return empty;
 
   const concurrency = sipConcurrencySlots(store.sipConcurrency);
   const upcomingForToken = await db.abandonedCheckout.findMany({
@@ -633,44 +704,30 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
   const due = await claimDueAutoCalls(store);
   if (due.length === 0) return empty;
 
-  let processed = 0;
-  let errors = 0;
-  const dispatchFailures: Array<{
-    checkoutId: string;
-    checkoutToken: string;
-    error: string;
-  }> = [];
+  // The batch is already capped at the store's free concurrency slots, so every
+  // claimed row is prepared and dialled in parallel instead of queueing behind
+  // the previous call's Shopify round-trips.
+  const batchStartedAt = Date.now();
+  const outcomes = await Promise.all(
+    due.map((checkout) => dispatchClaimedCheckout(checkout, storeDomain))
+  );
+  const dispatchFailures = outcomes.filter(
+    (outcome): outcome is DispatchFailure => outcome !== null
+  );
 
-  for (const checkout of due) {
-    await recordPipelineEvent(
-      { checkoutId: checkout.id, storeDomain, trigger: "auto" },
-      "queued",
-      "succeeded"
-    );
-    await markQueueClaimed(checkout, "auto");
-    const result = await runRecoveryCallPipeline(checkout, "auto");
-    if (result.success) {
-      processed++;
-      continue;
-    }
+  console.info(
+    "[process-calls] batch",
+    JSON.stringify({
+      storeDomain,
+      claimed: due.length,
+      dispatched: due.length - dispatchFailures.length,
+      batchDurationMs: Date.now() - batchStartedAt,
+    })
+  );
 
-    errors++;
-    const failure = {
-      checkoutId: checkout.id,
-      checkoutToken: checkout.checkoutToken,
-      error: sanitizeRecoveryError(result.error ?? "Unknown dispatch failure"),
-    };
-    await persistCheckoutError(checkout.id, failure.error);
-    dispatchFailures.push(failure);
-    console.warn(
-      "[process-calls] dispatch failed",
-      JSON.stringify({
-        storeDomain,
-        ...failure,
-        dispatchDurationMs: result.dispatchDurationMs,
-      })
-    );
-  }
-
-  return { processed, errors, dispatchFailures };
+  return {
+    processed: due.length - dispatchFailures.length,
+    errors: dispatchFailures.length,
+    dispatchFailures,
+  };
 }

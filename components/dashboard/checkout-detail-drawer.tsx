@@ -22,8 +22,13 @@ import {
   isActiveCall,
   STATUS_VARIANT,
 } from "@/lib/call-status";
-import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
+import {
+  formatCurrency,
+  formatDateTimeLabel,
+  formatPhoneNumber,
+} from "@/lib/utils";
 import { sanitizeRecoveryError } from "@/lib/recovery-error";
+import { StatusBadge } from "@/components/dashboard/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -113,10 +118,7 @@ function attemptHasCallDetails(attempt: CallAttemptRow): boolean {
 function CallAttemptHistoryRow({ attempt }: { attempt: CallAttemptRow }) {
   const failure = sanitizeRecoveryError(attempt.failureReason);
   const hasDetails = attemptHasCallDetails(attempt);
-  const startedAt = new Date(attempt.startedAt).toLocaleString([], {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
+  const startedAt = formatDateTimeLabel(attempt.startedAt);
 
   return (
     <li className="border-b border-border/60 py-2 last:border-b-0">
@@ -299,7 +301,11 @@ export function CheckoutDetailDrawer({
             <section className="space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold">Customer</h3>
-                <Badge variant={status.variant}>{status.label}</Badge>
+                <StatusBadge
+                  label={status.label}
+                  variant={status.variant}
+                  detail={status.detail}
+                />
               </div>
 
               <form onSubmit={handleSaveName} className="space-y-2">
@@ -406,10 +412,7 @@ export function CheckoutDetailDrawer({
               <h3 className="text-sm font-semibold">Schedule</h3>
               <DetailField label="Call time">
                 {checkout.scheduledCallAt
-                  ? new Date(checkout.scheduledCallAt).toLocaleString([], {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    })
+                  ? formatDateTimeLabel(checkout.scheduledCallAt)
                   : "Not set"}
               </DetailField>
               <div className="flex flex-wrap gap-2">

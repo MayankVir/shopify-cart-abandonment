@@ -39,8 +39,79 @@ const STATUS_LABELS: Partial<Record<CallStatus, string>> = {
   DRAFT_CREATE_FAILED: "Draft prep failed",
   CART_CREATE_FAILED: "Cart prep failed",
   ENRICH_FAILED: "Enrichment failed",
-  DISPATCH_FAILED: "Dispatch failed",
+  /** Covers both a failed SIP dispatch and a carrier failure with no reason. */
+  DISPATCH_FAILED: "Call failed",
+  BUSY: "Call failed - Busy",
+  NO_ANSWER: "No answer",
+  VOICEMAIL: "Voicemail",
+  INVALID_NUMBER: "Invalid number",
+  HANG_UP: "Hung up",
 };
+
+/** Only consulted when the error mentions SIP, so HTTP codes aren't misread. */
+const SIP_CODE_REASONS: Record<string, string> = {
+  "404": "Invalid number",
+  "408": "No answer",
+  "480": "No answer",
+  "484": "Invalid number",
+  "486": "User busy",
+  "487": "Call cancelled",
+  "503": "Carrier unavailable",
+  "603": "Call declined",
+};
+
+/** Carrier wording varies by provider, so fall back to matching the text. */
+const CARRIER_REASON_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/user\s*busy|\bbusy\b/i, "User busy"],
+  [/no[\s_-]*answer|temporarily\s*unavailable/i, "No answer"],
+  [/voicemail/i, "Voicemail"],
+  [/invalid[\s_-]*number|not\s*in\s*service|unallocated/i, "Invalid number"],
+  [/declined|rejected/i, "Call declined"],
+  [/hung?\s*up|hangup/i, "Hung up"],
+  [/timed?[\s_-]*out|timeout/i, "Timed out"],
+];
+
+const STATUS_FALLBACK_REASONS: Partial<Record<CallStatus, string>> = {
+  BUSY: "User busy",
+  NO_ANSWER: "No answer",
+  VOICEMAIL: "Voicemail",
+  INVALID_NUMBER: "Invalid number",
+  HANG_UP: "Hung up",
+  CART_CREATE_FAILED: "Cart could not be created",
+  DRAFT_CREATE_FAILED: "Draft order could not be created",
+  ENRICH_FAILED: "Context enrichment failed",
+};
+
+const MAX_DETAIL_LENGTH = 200;
+
+/**
+ * Human-readable "why" for a failed or retrying call, for tooltips. Prefers a
+ * recognized carrier reason, then the raw error, then a status-based guess.
+ */
+export function describeCallFailure(
+  status: CallStatus,
+  lastError?: string | null
+): string {
+  const text = lastError?.trim() ?? "";
+
+  if (/\bsip\b/i.test(text)) {
+    const code = text.match(/\b([1-6]\d\d)\b/)?.[1];
+    const sipReason = code ? SIP_CODE_REASONS[code] : undefined;
+    if (sipReason) return sipReason;
+  }
+
+  for (const [pattern, reason] of CARRIER_REASON_PATTERNS) {
+    if (pattern.test(text)) return reason;
+  }
+
+  if (text) {
+    return text.length > MAX_DETAIL_LENGTH
+      ? `${text.slice(0, MAX_DETAIL_LENGTH - 1)}…`
+      : text;
+  }
+
+  return STATUS_FALLBACK_REASONS[status] ?? "Unknown error";
+}
 
 export const TERMINAL_FAILURE_STATUSES: CallStatus[] = [
   CallStatus.NO_ANSWER,
@@ -59,19 +130,29 @@ export function displayCheckoutStatus(
   status: CallStatus,
   callScheduled: boolean,
   lastError?: string | null
-): { label: string; variant: BadgeVariant } {
+): { label: string; variant: BadgeVariant; detail?: string } {
   if (status === CallStatus.PENDING) {
     if (callScheduled && lastError) {
-      return { label: "Retry scheduled", variant: "warning" };
+      return {
+        label: "Retry scheduled",
+        variant: "warning",
+        detail: describeCallFailure(status, lastError),
+      };
     }
     return callScheduled
       ? { label: "Scheduled", variant: "info" }
       : { label: "Pending", variant: "muted" };
   }
 
+  const isFailure = TERMINAL_FAILURE_STATUSES.includes(status);
+
   return {
     label: formatCallStatus(status),
     variant: STATUS_VARIANT[status],
+    detail:
+      isFailure || lastError?.trim()
+        ? describeCallFailure(status, lastError)
+        : undefined,
   };
 }
 

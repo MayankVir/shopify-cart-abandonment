@@ -6,6 +6,16 @@ import {
   type LineItemRecord,
   lineItemsHaveVariantId,
 } from "./line-items";
+import {
+  bucketRefillMs,
+  isRetryableHttpStatus,
+  isThrottledGraphqlError,
+  parseRetryAfterMs,
+  retryDelayMs,
+  SHOPIFY_MAX_ATTEMPTS,
+  sleep,
+  type ShopifyCostExtension,
+} from "./shopify-retry";
 
 const STOREFRONT_API_VERSION = "2026-04";
 
@@ -58,54 +68,100 @@ export async function createStorefrontCart(
   if (normalizedPhone) buyerIdentity.phone = normalizedPhone;
   if (normalizedEmail) buyerIdentity.email = normalizedEmail;
 
-  let response: Response;
-  try {
-    response = await fetch(
-      `https://${storeDomain}/api/${STOREFRONT_API_VERSION}/graphql.json`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Shopify-Storefront-Access-Token": token,
-        },
-        body: JSON.stringify({
-          query: CART_CREATE_MUTATION,
-          variables: {
-            input: {
-              lines,
-              buyerIdentity,
-            },
-          },
-        }),
-        signal: AbortSignal.timeout(20_000),
-      }
-    );
-  } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
-      throw new Error("Storefront API timed out after 20s");
-    }
-    throw error;
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      `Storefront API error: ${response.status} ${response.statusText}`
-    );
-  }
-
-  const json = (await response.json()) as {
+  type CartCreateResponse = {
     data?: {
       cartCreate?: {
         cart?: { id: string; checkoutUrl: string };
         userErrors?: Array<{ field: string[]; message: string }>;
       };
     };
-    errors?: Array<{ message: string }>;
+    errors?: Array<{ message: string; extensions?: { code?: string } }>;
+    extensions?: { cost?: ShopifyCostExtension };
   };
 
-  if (json.errors?.length) {
-    throw new Error(json.errors.map((e) => e.message).join(", "));
+  let json: CartCreateResponse | null = null;
+  let lastError = new Error("Storefront cartCreate was not attempted");
+  let delayMs = 0;
+
+  for (let attempt = 0; attempt < SHOPIFY_MAX_ATTEMPTS && !json; attempt++) {
+    if (delayMs > 0) await sleep(delayMs);
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://${storeDomain}/api/${STOREFRONT_API_VERSION}/graphql.json`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shopify-Storefront-Access-Token": token,
+          },
+          body: JSON.stringify({
+            query: CART_CREATE_MUTATION,
+            variables: {
+              input: {
+                lines,
+                buyerIdentity,
+              },
+            },
+          }),
+          signal: AbortSignal.timeout(20_000),
+        }
+      );
+    } catch (error) {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new Error("Storefront API timed out after 20s");
+      }
+      throw error;
+    }
+
+    if (isRetryableHttpStatus(response.status)) {
+      lastError = new Error(
+        `Storefront API error: ${response.status} ${response.statusText}`
+      );
+      delayMs = retryDelayMs(attempt, {
+        retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")),
+      });
+      console.warn(
+        "[storefront] retrying",
+        JSON.stringify({
+          storeDomain,
+          status: response.status,
+          attempt: attempt + 1,
+          delayMs,
+        })
+      );
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Storefront API error: ${response.status} ${response.statusText}`
+      );
+    }
+
+    const body = (await response.json()) as CartCreateResponse;
+
+    if (body.errors?.length) {
+      const raw = body.errors.map((e) => e.message).join(", ");
+      if (isThrottledGraphqlError(body.errors)) {
+        lastError = new Error(raw);
+        delayMs = retryDelayMs(attempt, {
+          refillMs: bucketRefillMs(body.extensions?.cost),
+        });
+        console.warn(
+          "[storefront] throttled",
+          JSON.stringify({ storeDomain, attempt: attempt + 1, delayMs })
+        );
+        continue;
+      }
+      throw new Error(raw);
+    }
+
+    json = body;
   }
+
+  if (!json) throw lastError;
 
   const result = json.data?.cartCreate;
   const userErrors = result?.userErrors ?? [];

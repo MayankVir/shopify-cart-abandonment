@@ -26,9 +26,12 @@ import {
   isValidTimeZone,
 } from "@/lib/call-window";
 import {
+  cancelScheduledBusyRetries,
   enrollOpenCheckoutsForAutoCall,
+  rescheduleBusyFailures,
   unschedulePendingAutoCalls,
 } from "@/lib/call-queue";
+import { clampBusyRetryDelayMinutes } from "@/lib/busy-retry";
 import {
   toPipelineEventRow,
   type PipelineEventRow,
@@ -61,11 +64,13 @@ import {
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
 import { parseLineItems } from "@/lib/line-items";
-import {
-  SHEET_SYNC_PAGE_SIZE,
-  syncAbandonedCheckoutsFromSheet,
-} from "@/lib/sheet-sync";
+import { syncAbandonedCheckoutsFromSheet } from "@/lib/sheet-sync";
 import { clampRepeatCustomerWindowDays } from "@/lib/shopify-repeat-customer";
+import {
+  ACTIVE_POLL_MIN_AGE_MS,
+  reconcileStuckDispatchedCalls,
+  type ReconcileResult,
+} from "@/lib/call-reconcile";
 
 async function guardStoreAccess(storeDomain: string): Promise<string | null> {
   try {
@@ -145,9 +150,6 @@ export interface SyncResult {
   autoCalls?: { processed: number; errors: number };
   adminTokenSource?: string;
   adminTokenExpiresInSec?: number | null;
-  pageSize?: number;
-  page?: number;
-  hasMore?: boolean;
   totalCount?: number;
   shopifyPageInfo?: AbandonedCheckoutsPageInfo;
   sheetPageInfo?: SheetPageInfo;
@@ -163,19 +165,15 @@ export interface SheetPageInfo {
   totalDataRows?: number;
 }
 
-export interface PaginatedCheckoutsResult {
+export interface CheckoutListResult {
   success: boolean;
   checkouts: AbandonedCheckoutRow[];
-  page: number;
-  pageSize: number;
-  hasMore: boolean;
   totalCount: number;
   error?: string;
 }
 
 export interface SyncOptions {
   shopifyAfter?: string | null;
-  dbPage?: number;
   sheetPage?: number;
 }
 
@@ -235,18 +233,10 @@ function toRow(
   };
 }
 
-function checkoutListPageSize(mode: CheckoutSyncMode): number {
-  return mode === CheckoutSyncMode.SHEET
-    ? SHEET_SYNC_PAGE_SIZE
-    : ABANDONED_CHECKOUTS_PAGE_SIZE;
-}
+/** Safety ceiling so an unexpectedly large queue can't produce a huge payload. */
+const CHECKOUT_LIST_MAX_ROWS = 500;
 
-async function fetchOpenCheckouts(
-  storeDomain: string,
-  page = 0,
-  pageSize = ABANDONED_CHECKOUTS_PAGE_SIZE
-) {
-  const skip = page * pageSize;
+async function fetchOpenCheckouts(storeDomain: string) {
   const where = {
     storeDomain,
     callStatus: { notIn: [...TERMINAL_CALL_STATUSES] },
@@ -259,8 +249,7 @@ async function fetchOpenCheckouts(
         { shopifyCreatedAt: { sort: "desc", nulls: "last" } },
         { createdAt: "desc" },
       ],
-      skip,
-      take: pageSize,
+      take: CHECKOUT_LIST_MAX_ROWS,
       include: {
         callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
       },
@@ -270,25 +259,18 @@ async function fetchOpenCheckouts(
 
   return {
     checkouts: checkouts.map(toRow),
-    page,
-    pageSize,
-    hasMore: skip + checkouts.length < totalCount,
     totalCount,
   };
 }
 
 export async function getAbandonedCheckoutsForStore(
-  storeDomain: string,
-  page = 0
-): Promise<PaginatedCheckoutsResult> {
+  storeDomain: string
+): Promise<CheckoutListResult> {
   const { userId } = await auth();
   if (!userId) {
     return {
       success: false,
       checkouts: [],
-      page,
-      pageSize: ABANDONED_CHECKOUTS_PAGE_SIZE,
-      hasMore: false,
       totalCount: 0,
       error: "Unauthorized",
     };
@@ -299,9 +281,6 @@ export async function getAbandonedCheckoutsForStore(
     return {
       success: false,
       checkouts: [],
-      page,
-      pageSize: ABANDONED_CHECKOUTS_PAGE_SIZE,
-      hasMore: false,
       totalCount: 0,
       error: accessError,
     };
@@ -312,33 +291,61 @@ export async function getAbandonedCheckoutsForStore(
     return {
       success: false,
       checkouts: [],
-      page,
-      pageSize: ABANDONED_CHECKOUTS_PAGE_SIZE,
-      hasMore: false,
       totalCount: 0,
       error: "Store not found",
     };
   }
 
-  const pageSize = checkoutListPageSize(store.checkoutSyncMode);
-  const result = await fetchOpenCheckouts(storeDomain, page, pageSize);
+  const result = await fetchOpenCheckouts(storeDomain);
   return { success: true, ...result };
 }
 
-async function applyAutoCallEnrollment(storeDomain: string, enabled: boolean) {
+async function applyAutoCallEnrollment(
+  storeDomain: string,
+  enabled: boolean
+): Promise<number> {
   if (enabled) {
     const store = await db.store.findUnique({ where: { storeDomain } });
-    if (!store) return;
-    await enrollOpenCheckoutsForAutoCall(store);
-    return;
+    if (!store) return 0;
+    return enrollOpenCheckoutsForAutoCall(store);
   }
 
   await unschedulePendingAutoCalls(storeDomain);
+  return 0;
 }
 
 async function dispatchDueAutoCalls(storeDomain: string, enabled: boolean) {
   if (!enabled) return undefined;
   return processScheduledCallsForStore(storeDomain);
+}
+
+/**
+ * Polls the provider for in-flight calls that have gone quiet, so a carrier
+ * failure (which never produces an analysis webhook) is reflected within
+ * seconds instead of waiting for the next cron run. Safe to call on a short
+ * interval: it only acts on an explicit telephony failure.
+ */
+export async function reconcileInFlightCalls(
+  storeDomain: string
+): Promise<ReconcileResult & { success: boolean; error?: string }> {
+  const idle = { checked: 0, resolved: 0, stillRunning: 0, errors: 0 };
+
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, ...idle, error: accessError };
+  }
+
+  const store = await db.store.findUnique({ where: { storeDomain } });
+  if (!store) {
+    return { success: false, ...idle, error: "Store not found" };
+  }
+
+  const result = await reconcileStuckDispatchedCalls(store, new Date(), {
+    minAgeMs: ACTIVE_POLL_MIN_AGE_MS,
+    logNoChange: false,
+  });
+
+  return { success: true, ...result };
 }
 
 export async function syncAbandonedCheckoutsForStore(
@@ -353,12 +360,7 @@ export async function syncAbandonedCheckoutsForStore(
       const sheetResult = await syncAbandonedCheckoutsFromSheet(store, {
         page: sheetPage,
       });
-      const dbPage = options.dbPage ?? 0;
-      const pageResult = await fetchOpenCheckouts(
-        storeDomain,
-        dbPage,
-        SHEET_SYNC_PAGE_SIZE
-      );
+      const listResult = await fetchOpenCheckouts(storeDomain);
 
       console.info(
         "[sheet] abandoned checkouts synced",
@@ -373,17 +375,14 @@ export async function syncAbandonedCheckoutsForStore(
 
       return {
         success: true,
-        checkouts: pageResult.checkouts,
+        checkouts: listResult.checkouts,
         syncedAt: new Date().toISOString(),
         syncMode: "sheet",
         warning:
           sheetResult.skipped > 0
             ? `${sheetResult.skipped} sheet row(s) skipped (missing variant IDs).`
             : undefined,
-        pageSize: pageResult.pageSize,
-        page: pageResult.page,
-        hasMore: pageResult.hasMore,
-        totalCount: pageResult.totalCount,
+        totalCount: listResult.totalCount,
         sheetPageInfo: {
           page: sheetResult.page,
           hasNextPage: sheetResult.hasMore,
@@ -531,22 +530,18 @@ export async function syncAbandonedCheckoutsForStore(
       }
     }
 
-    const dbPage = options.dbPage ?? 0;
-    const pageResult = await fetchOpenCheckouts(storeDomain, dbPage);
+    const listResult = await fetchOpenCheckouts(storeDomain);
     const tokenCache = getCachedAdminTokenInfo(storeDomain);
 
     return {
       success: true,
-      checkouts: pageResult.checkouts,
+      checkouts: listResult.checkouts,
       syncedAt: new Date().toISOString(),
       syncMode,
       warning,
       adminTokenSource: tokenCache.cached ? "cache" : undefined,
       adminTokenExpiresInSec: tokenCache.expiresInSec,
-      pageSize: pageResult.pageSize,
-      page: pageResult.page,
-      hasMore: pageResult.hasMore,
-      totalCount: pageResult.totalCount,
+      totalCount: listResult.totalCount,
       shopifyPageInfo,
     };
   } catch (error) {
@@ -978,8 +973,59 @@ export async function getStoreRecoverySettings(storeDomain: string) {
       callWindowEnabled: true,
       callWindowStartMinute: true,
       callWindowEndMinute: true,
+      busyRetryEnabled: true,
+      busyRetryDelayMinutes: true,
     },
   });
+}
+
+/**
+ * Busy-retry policy. Flipping it applies retroactively: switching off settles
+ * every pending busy retry as a failed call, switching on puts busy failures
+ * back in the queue.
+ */
+export async function updateStoreBusyRetrySettings(
+  storeDomain: string,
+  input: { busyRetryEnabled: boolean; busyRetryDelayMinutes: number }
+): Promise<{
+  success: boolean;
+  error?: string;
+  cancelled?: number;
+  rescheduled?: number;
+}> {
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
+  }
+
+  const store = await db.store.findUnique({ where: { storeDomain } });
+  if (!store) {
+    return { success: false, error: "Store not found" };
+  }
+
+  const wasEnabled = store.busyRetryEnabled;
+  const busyRetryDelayMinutes = clampBusyRetryDelayMinutes(
+    input.busyRetryDelayMinutes
+  );
+
+  const updated = await db.store.update({
+    where: { storeDomain },
+    data: {
+      busyRetryEnabled: input.busyRetryEnabled,
+      busyRetryDelayMinutes,
+    },
+  });
+
+  let cancelled = 0;
+  let rescheduled = 0;
+  if (wasEnabled && !input.busyRetryEnabled) {
+    cancelled = await cancelScheduledBusyRetries(storeDomain);
+  } else if (!wasEnabled && input.busyRetryEnabled) {
+    rescheduled = await rescheduleBusyFailures(updated);
+  }
+
+  revalidatePath("/dashboard/recovery");
+  return { success: true, cancelled, rescheduled };
 }
 
 export async function updateStoreSheetSettings(
@@ -1168,7 +1214,7 @@ export async function updateStoreRecoverySettings(
     callWindowEndMinute?: number;
     ianaTimezoneOverride?: string;
   }
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; enrolled?: number }> {
   const accessError = await guardStoreAccess(storeDomain);
   if (accessError) {
     return { success: false, error: accessError };
@@ -1226,20 +1272,19 @@ export async function updateStoreRecoverySettings(
     },
   });
 
+  let enrolled = 0;
   if (autoCallsEnabled !== undefined) {
-    await applyAutoCallEnrollment(storeDomain, autoCallsEnabled);
+    enrolled = await applyAutoCallEnrollment(storeDomain, autoCallsEnabled);
   }
 
-  revalidatePath("/dashboard/analytics");
-  revalidatePath("/dashboard/billing");
   revalidatePath("/dashboard/recovery");
-  return { success: true };
+  return { success: true, enrolled };
 }
 
 export async function updateStoreAutoCallsEnabled(
   storeDomain: string,
   enabled: boolean
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; enrolled?: number }> {
   const accessError = await guardStoreAccess(storeDomain);
   if (accessError) {
     return { success: false, error: accessError };
@@ -1249,10 +1294,10 @@ export async function updateStoreAutoCallsEnabled(
     where: { storeDomain },
     data: { autoCallsEnabled: enabled },
   });
-  await applyAutoCallEnrollment(storeDomain, enabled);
+  const enrolled = await applyAutoCallEnrollment(storeDomain, enabled);
 
   revalidatePath("/dashboard/recovery");
-  return { success: true };
+  return { success: true, enrolled };
 }
 
 export async function verifyStoreShopifyAccess(

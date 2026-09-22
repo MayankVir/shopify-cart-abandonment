@@ -25,6 +25,11 @@ import {
   validateLinkedEvents,
   type TtaiWebhookEventName,
 } from "@/lib/ttai-webhook";
+import {
+  recordWebhookEvent,
+  WEBHOOK_OUTCOMES,
+  type WebhookOutcome,
+} from "@/lib/webhook-events";
 
 function webhookHeaders(request: NextRequest): Record<string, string> {
   return {
@@ -66,8 +71,40 @@ function shouldUpdateTerminalStatus(event: string): boolean {
 }
 
 export async function POST(request: NextRequest) {
+  const receivedAt = new Date();
+  const startedAtMs = Date.now();
   const rawBody = await request.text();
+  const deliveryId = request.headers.get("webhook-id");
   const secret = process.env.TTAI_WEBHOOK_SECRET?.trim();
+
+  // Accumulates whatever has been resolved by the time a path terminates, so
+  // even an early rejection is logged with as much identity as is known.
+  const logContext: {
+    eventType?: string;
+    sessionId?: string | null;
+    callId?: string | null;
+    storeDomain?: string | null;
+    callAttemptId?: string | null;
+    checkoutId?: string | null;
+    payload?: unknown;
+  } = {};
+
+  const logEvent = (
+    outcome: WebhookOutcome,
+    httpStatus: number,
+    note?: string
+  ) =>
+    recordWebhookEvent({
+      source: "ttai",
+      outcome,
+      httpStatus,
+      rawBody,
+      deliveryId,
+      receivedAt,
+      startedAtMs,
+      note,
+      ...logContext,
+    });
 
   if (secret) {
     const headers = webhookHeaders(request);
@@ -77,12 +114,22 @@ export async function POST(request: NextRequest) {
       try {
         const wh = new Webhook(secret);
         wh.verify(rawBody, headers);
-      } catch {
+      } catch (error) {
+        await logEvent(
+          WEBHOOK_OUTCOMES.REJECTED_SIGNATURE,
+          401,
+          error instanceof Error ? error.message : "signature verification failed"
+        );
         return NextResponse.json({ error: "Invalid webhook signature" }, { status: 401 });
       }
     } else {
       const legacyHeader = request.headers.get("x-ttai-webhook-secret");
       if (legacyHeader !== secret) {
+        await logEvent(
+          WEBHOOK_OUTCOMES.REJECTED_UNAUTHORIZED,
+          401,
+          "x-ttai-webhook-secret did not match"
+        );
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
     }
@@ -92,8 +139,10 @@ export async function POST(request: NextRequest) {
   try {
     payload = JSON.parse(rawBody) as Record<string, unknown>;
   } catch {
+    await logEvent(WEBHOOK_OUTCOMES.INVALID_JSON, 400, "body is not valid JSON");
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+  logContext.payload = payload;
 
   const dataForExtraction = eventData(payload);
   const dataForStorage = asRecord(payload.data) ?? payload;
@@ -101,6 +150,10 @@ export async function POST(request: NextRequest) {
   const identity = extractSessionIdentity(dataForExtraction, payload);
   const callId = identity.callId;
   const sessionId = identity.sessionId;
+
+  logContext.eventType = event;
+  logContext.sessionId = sessionId;
+  logContext.callId = callId;
 
   console.info(
     "[ttai-webhook]",
@@ -113,10 +166,16 @@ export async function POST(request: NextRequest) {
   );
 
   if (!callId && !sessionId) {
+    await logEvent(
+      WEBHOOK_OUTCOMES.MISSING_IDENTITY,
+      422,
+      `payload keys: ${Object.keys(dataForExtraction).join(", ")}`
+    );
     return NextResponse.json({ error: "Missing call_id or session_id" }, { status: 422 });
   }
 
   if (event.toLowerCase() === "session.started") {
+    await logEvent(WEBHOOK_OUTCOMES.ACKNOWLEDGED, 200);
     return NextResponse.json({ ok: true, action: "acknowledged", event });
   }
 
@@ -146,8 +205,16 @@ export async function POST(request: NextRequest) {
         "[ttai-webhook] no matching attempt",
         JSON.stringify({ event, sessionId, callId })
       );
+      await logEvent(
+        WEBHOOK_OUTCOMES.IGNORED_NO_ATTEMPT,
+        200,
+        "no recovery or NDRC attempt matches this call_id/session_id"
+      );
       return NextResponse.json({ ok: true, action: "ignored", reason: "attempt not found" });
     }
+
+    logContext.callAttemptId = ndrcAttempt.id;
+    logContext.storeDomain = ndrcAttempt.order.storeDomain;
 
     const rawStatus = mapEventToStatus(event, dataForExtraction);
     const mappedStatus = mapTtaiStatusToCallStatus(rawStatus);
@@ -194,12 +261,17 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    await logEvent(WEBHOOK_OUTCOMES.NDRC_UPDATED, 200, `status=${mappedStatus}`);
     return NextResponse.json({
       ok: true,
       action: "ndrc_updated",
       status: mappedStatus,
     });
   }
+
+  logContext.callAttemptId = attempt.id;
+  logContext.checkoutId = attempt.abandonedCheckoutId;
+  logContext.storeDomain = attempt.checkout.storeDomain;
 
   if (
     sessionId &&
@@ -215,6 +287,11 @@ export async function POST(request: NextRequest) {
         attemptCallId: attempt.callId,
         incomingCallId: callId,
       })
+    );
+    await logEvent(
+      WEBHOOK_OUTCOMES.REJECTED_MISMATCH,
+      409,
+      `session_id mismatch: stored=${attempt.sessionId} incoming=${sessionId}`
     );
     return NextResponse.json(
       {
@@ -237,6 +314,11 @@ export async function POST(request: NextRequest) {
         incomingSessionId: sessionId,
       })
     );
+    await logEvent(
+      WEBHOOK_OUTCOMES.REJECTED_MISMATCH,
+      409,
+      `call_id mismatch: stored=${attempt.callId} incoming=${callId}`
+    );
     return NextResponse.json(
       {
         ok: false,
@@ -258,6 +340,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn("[ttai-webhook] merge rejected", message);
+    await logEvent(WEBHOOK_OUTCOMES.REJECTED_MERGE, 409, message);
     return NextResponse.json(
       { ok: false, action: "rejected", reason: message },
       { status: 409 }
@@ -398,6 +481,12 @@ export async function POST(request: NextRequest) {
       );
     }
   }
+
+  await logEvent(
+    WEBHOOK_OUTCOMES.UPDATED,
+    200,
+    `status=${nextCheckoutStatus} terminal=${isTerminal} durationSec=${durationSec ?? "null"}`
+  );
 
   return NextResponse.json({
     ok: true,

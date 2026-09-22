@@ -105,6 +105,10 @@ model Store {
   /** Exclusive local end of the calling window, minutes from midnight (default 21:00). */
   callWindowEndMinute   Int            @default(1260)
   callWindowEnabled     Boolean        @default(true)
+  /** When true, a call that hit a busy signal is retried once after busyRetryDelayMinutes. */
+  busyRetryEnabled      Boolean        @default(true)
+  /** How long to wait before retrying a busy number (clamped to the calling window). */
+  busyRetryDelayMinutes Int            @default(1440)
   /** When true, cron syncs and auto-dials due recovery rows even if the dashboard is closed. */
   autoCallsEnabled Boolean             @default(false)
   checkoutSyncMode CheckoutSyncMode    @default(POLLING)
@@ -201,6 +205,8 @@ model AbandonedCheckout {
   autoCallExcluded  Boolean       @default(false)
   /** Pre-call auto-retry count (draft/cart/enrich/dispatch). Telephony retries are tracked separately. */
   autoRetryCount    Int           @default(0)
+  /** Telephony outcome this scheduled retry is for (e.g. "BUSY"); null when not a retry. */
+  retryReason       String?
   shopifyCreatedAt  DateTime?
   callStatus        CallStatus    @default(PENDING)
   lastError         String?       @db.Text
@@ -284,6 +290,42 @@ model CallPipelineEvent {
   @@index([checkoutId, startedAt])
   @@index([callAttemptId])
   @@index([storeDomain])
+}
+
+/** Append-only log of provider integration traffic in both directions: every
+ * inbound webhook (including ones rejected before the body could be parsed) and
+ * every outbound session poll. Lets a call stuck in DISPATCHED be checked
+ * against what the provider actually delivered or reported. IDs are plain
+ * columns, not relations, so the audit trail survives row deletion. */
+model WebhookEvent {
+  id            String   @id @default(uuid())
+  /** ttai | shopify_checkout_update | ttai_session_poll */
+  source        String
+  /** Provider event name when parseable (e.g. "session.completed"). */
+  eventType     String   @default("")
+  /** What the handler did: see WEBHOOK_OUTCOMES in lib/webhook-events.ts. */
+  outcome       String
+  /** Response status for inbound requests; null for outbound polls. */
+  httpStatus    Int?
+  sessionId     String?
+  callId        String?
+  storeDomain   String?
+  callAttemptId String?
+  checkoutId    String?
+  /** Standard Webhooks `webhook-id` header — repeats mean provider retries. */
+  deliveryId    String?
+  /** Parsed body, or { raw } when unparseable, or { raw, truncated } when large. */
+  payload       Json     @default("{}")
+  payloadBytes  Int      @default(0)
+  /** Rejection reason or handler error, when there is one. */
+  note          String?  @db.Text
+  receivedAt    DateTime @default(now())
+  processingMs  Int?
+
+  @@index([sessionId])
+  @@index([callId])
+  @@index([receivedAt])
+  @@index([source, outcome])
 }
 
 /** NDRC = Non-Delivery Report Confirmation. Sheet-sourced orders with failed

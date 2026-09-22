@@ -41,7 +41,15 @@ import { TtaiCallDetails } from "@/components/dashboard/ttai-call-details";
 import { isTtaiWebhookStore } from "@/lib/ttai-webhook";
 import { CallLogEntry, useAnalyticsStore } from "@/store/use-analytics-store";
 import { STATUS_VARIANT, formatCallStatus } from "@/lib/call-status";
-import { cn, formatCurrency, formatPhoneNumber, formatShortUrl } from "@/lib/utils";
+import {
+  cn,
+  formatCurrency,
+  formatDateLabel,
+  formatDateTimeLabel,
+  formatPhoneNumber,
+  formatShortUrl,
+  formatTimeLabel,
+} from "@/lib/utils";
 
 function formatDuration(seconds: number | null | undefined): string {
   if (seconds == null || seconds <= 0) return "—";
@@ -51,33 +59,17 @@ function formatDuration(seconds: number | null | undefined): string {
   return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
 }
 
-function formatCallTime(iso: string): { primary: string; secondary: string } {
+/** "22 Sept 2026" + "04:50 PM", joined as "22 Sept 2026, 04:50 PM". */
+function formatCallTime(iso: string): {
+  primary: string;
+  secondary: string;
+  full: string;
+} {
   const date = new Date(iso);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  const secondary = date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-
-  if (diffDays === 0) {
-    return { primary: "Today", secondary };
-  }
-  if (diffDays === 1) {
-    return { primary: "Yesterday", secondary };
-  }
-  if (diffDays < 7) {
-    return {
-      primary: date.toLocaleDateString([], { weekday: "short" }),
-      secondary,
-    };
-  }
-
   return {
-    primary: date.toLocaleDateString([], { month: "short", day: "numeric" }),
-    secondary: date.toLocaleDateString([], { year: "numeric" }),
+    primary: formatDateLabel(date),
+    secondary: formatTimeLabel(date),
+    full: formatDateTimeLabel(date),
   };
 }
 
@@ -187,9 +179,7 @@ function CallLogDetailSheet({
         <div className="flex-1 overflow-y-auto px-6 py-5">
           <div className="space-y-6">
             <section className="grid gap-3 sm:grid-cols-2">
-              <DetailField label="When">
-                {when.primary} at {when.secondary}
-              </DetailField>
+              <DetailField label="When">{when.full}</DetailField>
               <DetailField label="Order ID">
                 <span className="font-mono text-xs">{log.checkoutToken}</span>
               </DetailField>
@@ -214,13 +204,9 @@ function CallLogDetailSheet({
                           log.repeatCustomerOrderCount === 1 ? "" : "s"
                         } in window${
                           log.repeatCustomerLastOrderAt
-                            ? ` · last ${new Date(
+                            ? ` · last ${formatDateLabel(
                                 log.repeatCustomerLastOrderAt
-                              ).toLocaleDateString([], {
-                                month: "short",
-                                day: "numeric",
-                                year: "numeric",
-                              })}`
+                              )}`
                             : ""
                         }`
                       : "Yes"
@@ -417,9 +403,11 @@ function CallLogRow({
         </p>
       </div>
 
-      <div className="hidden w-24 shrink-0 text-right sm:block">
-        <p className="text-sm font-medium">{when.primary}</p>
-        <p className="text-xs text-muted-foreground">{when.secondary}</p>
+      <div className="hidden w-28 shrink-0 text-right sm:block">
+        <p className="whitespace-nowrap text-sm font-medium">{when.primary}</p>
+        <p className="text-xs tabular-nums text-muted-foreground">
+          {when.secondary}
+        </p>
       </div>
 
       <div className="flex shrink-0 flex-col items-end gap-1 sm:hidden">
@@ -468,7 +456,7 @@ export function CallLogPanel() {
                 <span className="w-24 shrink-0">Cart value</span>
                 <span className="w-36 shrink-0">Status</span>
                 <span className="w-20 shrink-0 text-right">Duration</span>
-                <span className="w-24 shrink-0 text-right">When</span>
+                <span className="w-28 shrink-0 text-right">When</span>
               </div>
 
               <div className="space-y-2">

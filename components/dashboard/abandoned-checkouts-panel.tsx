@@ -15,6 +15,7 @@ import {
   getStoreRecoverySettings,
   bulkStopRecoveryCallAction,
   initiateRecoveryCall,
+  reconcileInFlightCalls,
   stopRecoveryCallAction,
   syncAbandonedCheckouts,
   updateStoreAutoCallsEnabled,
@@ -30,7 +31,6 @@ import {
   isActiveCall,
 } from "@/lib/call-status";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -46,6 +46,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { CheckoutDetailDrawer } from "@/components/dashboard/checkout-detail-drawer";
+import { StatusBadge } from "@/components/dashboard/status-badge";
 import { EditCheckoutScheduleDialog } from "@/components/dashboard/edit-checkout-schedule-dialog";
 import {
   RecoverySettings,
@@ -55,15 +56,19 @@ import {
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { formatDurationMs } from "@/lib/call-pipeline-events";
-import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
+import {
+  formatCurrency,
+  formatDateTimeLabel,
+  formatPhoneNumber,
+} from "@/lib/utils";
 import { CallStatus } from "@prisma/client";
+
+/** How often the dashboard polls the provider for in-flight call outcomes. */
+const IN_FLIGHT_POLL_MS = 10_000;
 
 function formatScheduledWhen(scheduledCallAt: string | null): string | null {
   if (!scheduledCallAt) return null;
-  return new Date(scheduledCallAt).toLocaleString([], {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+  return formatDateTimeLabel(scheduledCallAt);
 }
 
 function ScheduleCell({
@@ -192,7 +197,11 @@ function CheckoutRow({
         />
       </TableCell>
       <TableCell className="px-3 py-2">
-        <Badge variant={status.variant}>{status.label}</Badge>
+        <StatusBadge
+          label={status.label}
+          variant={status.variant}
+          detail={status.detail}
+        />
       </TableCell>
       <TableCell className="px-3 py-2 text-right">
         <div className="flex items-center justify-end gap-1">
@@ -236,8 +245,6 @@ export function AbandonedCheckoutsPanel() {
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [isBulkStopping, startBulkStop] = useTransition();
-  const [dbPage, setDbPage] = useState(0);
-  const [hasMoreDb, setHasMoreDb] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [shopifyPageInfo, setShopifyPageInfo] = useState<{
     hasNextPage: boolean;
@@ -246,7 +253,6 @@ export function AbandonedCheckoutsPanel() {
   const [sheetPageInfo, setSheetPageInfo] = useState<SheetPageInfo | null>(
     null,
   );
-  const [isLoadingMore, startLoadMore] = useTransition();
   const [isLoadingCheckouts, setIsLoadingCheckouts] = useState(false);
   const [hasLoadedCheckouts, setHasLoadedCheckouts] = useState(false);
   const [recoverySettings, setRecoverySettings] =
@@ -293,15 +299,10 @@ export function AbandonedCheckoutsPanel() {
       }
 
       try {
-        const result = await getAbandonedCheckoutsForStore(
-          selectedStoreDomain,
-          0,
-        );
+        const result = await getAbandonedCheckoutsForStore(selectedStoreDomain);
         if (!result.success) return;
 
         setCheckouts(result.checkouts);
-        setDbPage(result.page);
-        setHasMoreDb(result.hasMore);
         setTotalCount(result.totalCount);
         setHasLoadedCheckouts(true);
       } finally {
@@ -315,8 +316,6 @@ export function AbandonedCheckoutsPanel() {
 
   useEffect(() => {
     setSelectedIds(new Set());
-    setDbPage(0);
-    setHasMoreDb(false);
     setTotalCount(0);
     setShopifyPageInfo(null);
     setSheetPageInfo(null);
@@ -361,7 +360,6 @@ export function AbandonedCheckoutsPanel() {
         const result = await syncAbandonedCheckouts(selectedStoreDomain, {
           shopifyAfter: options?.shopifyAfter,
           sheetPage: options?.sheetPage ?? 0,
-          dbPage: 0,
         });
         if (!result.success) {
           toast.error(result.error ?? "Failed to sync checkouts", {
@@ -370,8 +368,6 @@ export function AbandonedCheckoutsPanel() {
           return;
         }
         setCheckouts(result.checkouts);
-        setDbPage(result.page ?? 0);
-        setHasMoreDb(result.hasMore ?? false);
         setTotalCount(result.totalCount ?? result.checkouts.length);
         setShopifyPageInfo(result.shopifyPageInfo ?? null);
         setSheetPageInfo(result.sheetPageInfo ?? null);
@@ -384,26 +380,6 @@ export function AbandonedCheckoutsPanel() {
     },
     [selectedStoreDomain],
   );
-
-  function loadMoreDb() {
-    if (!selectedStoreDomain) return;
-
-    const nextPage = dbPage + 1;
-    startLoadMore(async () => {
-      const result = await getAbandonedCheckoutsForStore(
-        selectedStoreDomain,
-        nextPage,
-      );
-      if (!result.success) {
-        toast.error(result.error ?? "Failed to load checkouts");
-        return;
-      }
-      setCheckouts((current) => [...current, ...result.checkouts]);
-      setDbPage(result.page);
-      setHasMoreDb(result.hasMore);
-      setTotalCount(result.totalCount);
-    });
-  }
 
   function syncNextShopifyPage() {
     if (!shopifyPageInfo?.endCursor) return;
@@ -526,6 +502,42 @@ export function AbandonedCheckoutsPanel() {
     refreshOpenCheckouts,
   ]);
 
+  // A carrier failure never fires an analysis webhook, so while calls are in
+  // flight we ask the provider directly instead of leaving the row DISPATCHED.
+  useEffect(() => {
+    if (!selectedStoreDomain || !shouldLiveRefreshOpenCheckouts) return;
+
+    let cancelled = false;
+    let polling = false;
+
+    async function pollInFlightCalls() {
+      if (polling || !selectedStoreDomain) return;
+      polling = true;
+      try {
+        const result = await reconcileInFlightCalls(selectedStoreDomain);
+        if (cancelled || !result.success || result.resolved === 0) return;
+        await refreshOpenCheckouts({ silent: true });
+      } catch {
+        // Transient provider or network failures retry on the next tick.
+      } finally {
+        polling = false;
+      }
+    }
+
+    const interval = setInterval(() => {
+      void pollInFlightCalls();
+    }, IN_FLIGHT_POLL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [
+    selectedStoreDomain,
+    shouldLiveRefreshOpenCheckouts,
+    refreshOpenCheckouts,
+  ]);
+
   useEffect(() => {
     if (!selectedStoreDomain || !autoCallsEnabled) return;
 
@@ -541,6 +553,8 @@ export function AbandonedCheckoutsPanel() {
       current ? { ...current, ...patch } : current,
     );
     setAutoCallsEnabled(patch.autoCallsEnabled);
+    // Saving can re-queue or settle busy retries, so the rows may have moved.
+    void refreshOpenCheckouts({ silent: true });
   }
 
   function handleAutoCallToggle(enabled: boolean) {
@@ -560,7 +574,9 @@ export function AbandonedCheckoutsPanel() {
       );
       toast.success(
         enabled
-          ? "Auto-call on. Due rows will be dialed one at a time."
+          ? result.enrolled
+            ? `Auto-call on. Queued ${result.enrolled} checkout${result.enrolled === 1 ? "" : "s"} for the next calling slot.`
+            : "Auto-call on. No pending checkouts with a phone number to queue."
           : "Auto-call off. Pending schedules were cancelled.",
       );
       void refreshOpenCheckouts({ silent: true });
@@ -575,7 +591,7 @@ export function AbandonedCheckoutsPanel() {
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
           <span className="text-xs text-muted-foreground">
             {lastSyncedAt
-              ? `Last sync: ${new Date(lastSyncedAt).toLocaleString()}`
+              ? `Last sync: ${formatDateTimeLabel(lastSyncedAt)}`
               : "Not synced yet"}
           </span>
           <div className="flex flex-wrap items-center gap-2">
@@ -794,7 +810,9 @@ export function AbandonedCheckoutsPanel() {
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3">
               <div className="space-y-0.5">
                 <span className="text-xs text-muted-foreground">
-                  Showing {checkouts.length} of {totalCount} in queue
+                  {checkouts.length < totalCount
+                    ? `Showing first ${checkouts.length} of ${totalCount} in queue`
+                    : `${totalCount} in queue`}
                 </span>
                 {sheetPageInfo && (
                   <p className="text-xs text-muted-foreground">
@@ -807,19 +825,6 @@ export function AbandonedCheckoutsPanel() {
                 )}
               </div>
               <div className="flex flex-wrap gap-2">
-                {hasMoreDb && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={loadMoreDb}
-                    disabled={isLoadingMore}
-                  >
-                    {isLoadingMore ? (
-                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                    ) : null}
-                    Load more
-                  </Button>
-                )}
                 {sheetPageInfo?.hasNextPage && (
                   <Button
                     variant="outline"
