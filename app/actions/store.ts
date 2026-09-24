@@ -36,6 +36,7 @@ import {
   StoreAccessError,
 } from "@/lib/store-access";
 import { requireAdmin } from "@/lib/admin-gate";
+import { parseCustomerNameFromUserContext } from "@/lib/user-context";
 
 export interface StoreActionResult {
   success: boolean;
@@ -342,13 +343,21 @@ export async function getStoresForDashboard() {
 type CheckoutWithLatestAttempt = Prisma.AbandonedCheckoutGetPayload<{
   include: {
     callAttempts: { orderBy: { startedAt: "desc" }; take: 1 };
+    _count: { select: { callAttempts: true } };
   };
 }>;
+
+/** Shared by every query that feeds the call log, so rows never differ by caller. */
+const CALL_LOG_INCLUDE = {
+  callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
+  _count: { select: { callAttempts: true } },
+} satisfies Prisma.AbandonedCheckoutInclude;
 
 function toCallLogEntry(c: CheckoutWithLatestAttempt): CallLogEntry {
   return {
     id: c.id,
     checkoutToken: c.checkoutToken,
+    customerName: parseCustomerNameFromUserContext(c.userContext),
     customerPhone: c.customerPhone,
     customerEmail: c.customerEmail,
     cartValue: c.cartValue,
@@ -369,6 +378,7 @@ function toCallLogEntry(c: CheckoutWithLatestAttempt): CallLogEntry {
       : null,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
+    attemptCount: c._count.callAttempts,
     latestAttempt: c.callAttempts[0]
       ? {
           id: c.callAttempts[0].id,
@@ -377,6 +387,8 @@ function toCallLogEntry(c: CheckoutWithLatestAttempt): CallLogEntry {
           failureReason: c.callAttempts[0].failureReason,
           failureStage: c.callAttempts[0].failureStage,
           durationSec: c.callAttempts[0].durationSec,
+          trigger: c.callAttempts[0].trigger,
+          startedAt: c.callAttempts[0].startedAt.toISOString(),
         }
       : null,
   };
@@ -394,9 +406,7 @@ export async function fetchTtaiSessionDetailsForCallLog(checkoutId: string): Pro
 
   const checkout = await db.abandonedCheckout.findUnique({
     where: { id: checkoutId },
-    include: {
-      callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
-    },
+    include: CALL_LOG_INCLUDE,
   });
 
   if (!checkout) {
@@ -464,9 +474,7 @@ export async function fetchTtaiSessionDetailsForCallLog(checkoutId: string): Pro
 
   const refreshed = await db.abandonedCheckout.findUnique({
     where: { id: checkout.id },
-    include: {
-      callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
-    },
+    include: CALL_LOG_INCLUDE,
   });
 
   revalidatePath("/dashboard/analytics");
@@ -554,9 +562,7 @@ export async function getCheckoutLogsForStore(storeDomain: string) {
     },
     orderBy: { updatedAt: "desc" },
     take: 100,
-    include: {
-      callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
-    },
+    include: CALL_LOG_INCLUDE,
   });
 
   return checkouts.map(toCallLogEntry);

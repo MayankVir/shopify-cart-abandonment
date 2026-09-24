@@ -73,6 +73,15 @@ function formatCallTime(iso: string): {
   };
 }
 
+/** "auto" or "2 attempts · auto" — keeps retry count visible on a per-checkout row. */
+function attemptSummary(log: CallLogEntry): string {
+  const trigger = log.latestAttempt?.trigger;
+  if (log.attemptCount > 1) {
+    return `${log.attemptCount} attempts${trigger ? ` · ${trigger}` : ""}`;
+  }
+  return trigger ?? "";
+}
+
 function statusIcon(status: CallStatus) {
   if (status === CallStatus.COMPLETED) {
     return PhoneCall;
@@ -150,11 +159,20 @@ function CallLogDetailSheet({
             </div>
             <div className="min-w-0 flex-1 space-y-1">
               <SheetTitle className="truncate">
-                {log.customerPhone
-                  ? formatPhoneNumber(log.customerPhone)
-                  : "Unknown caller"}
+                {log.customerName ||
+                  (log.customerPhone
+                    ? formatPhoneNumber(log.customerPhone)
+                    : "Unknown caller")}
               </SheetTitle>
               <SheetDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {log.customerName && log.customerPhone ? (
+                  <>
+                    <span className="font-mono">
+                      {formatPhoneNumber(log.customerPhone)}
+                    </span>
+                    <span>·</span>
+                  </>
+                ) : null}
                 <span className="font-medium text-foreground">
                   {formatCurrency(log.cartValue)}
                 </span>
@@ -180,6 +198,12 @@ function CallLogDetailSheet({
           <div className="space-y-6">
             <section className="grid gap-3 sm:grid-cols-2">
               <DetailField label="When">{when.full}</DetailField>
+              <DetailField label="Attempts">
+                {log.attemptCount || "—"}
+                {log.latestAttempt
+                  ? ` · last ${log.latestAttempt.trigger}`
+                  : ""}
+              </DetailField>
               <DetailField label="Order ID">
                 <span className="font-mono text-xs">{log.checkoutToken}</span>
               </DetailField>
@@ -330,7 +354,7 @@ function CallLogRow({
   onSelect: () => void;
 }) {
   const StatusIcon = statusIcon(log.callStatus as CallStatus);
-  const when = formatCallTime(log.updatedAt);
+  const when = formatCallTime(log.latestAttempt?.startedAt ?? log.updatedAt);
   const hasDetails =
     isTtaiWebhookStore(log.latestAttempt?.toolCallsJson) &&
     Boolean(log.latestAttempt?.toolCallsJson.sessionDetails);
@@ -366,10 +390,16 @@ function CallLogRow({
 
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium">
-          {log.customerPhone ? formatPhoneNumber(log.customerPhone) : "—"}
+          {log.customerName ||
+            (log.customerPhone ? formatPhoneNumber(log.customerPhone) : "—")}
         </p>
-        <p className="truncate font-mono text-xs text-muted-foreground">
-          {log.checkoutToken}
+        <p className="truncate text-xs text-muted-foreground">
+          <span className="font-mono">
+            {log.customerName && log.customerPhone
+              ? formatPhoneNumber(log.customerPhone)
+              : log.checkoutToken}
+          </span>
+          {attemptSummary(log) ? ` · ${attemptSummary(log)}` : ""}
         </p>
       </div>
 
@@ -420,9 +450,25 @@ function CallLogRow({
   );
 }
 
-export function CallLogPanel() {
-  const callLogs = useFilteredCallLogs();
+interface CallLogPanelProps {
+  /** Totals for the header; comes from the analytics view when available. */
+  summary?: { totalCalls: number; totalMinutes: number };
+  /** ISO start of the selected date range; older calls are hidden. */
+  since?: string;
+}
+
+export function CallLogPanel({ summary, since }: CallLogPanelProps = {}) {
+  const allCallLogs = useFilteredCallLogs();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const callLogs = useMemo(() => {
+    if (!since) return allCallLogs;
+    const from = new Date(since).getTime();
+    return allCallLogs.filter(
+      (log) =>
+        new Date(log.latestAttempt?.startedAt ?? log.updatedAt).getTime() >= from
+    );
+  }, [allCallLogs, since]);
 
   const selectedLog = useMemo(
     () => callLogs.find((log) => log.id === selectedId) ?? null,
@@ -433,8 +479,11 @@ export function CallLogPanel() {
     <>
       <Card className="border-border/60">
         <CardHeader>
-          <CardTitle>Call History & Analytics</CardTitle>
+          <CardTitle>Call log</CardTitle>
           <CardDescription>
+            {summary
+              ? `${summary.totalCalls} calls · ${summary.totalMinutes} min consumed · `
+              : ""}
             Click a call to open full transcript, evaluation, and session details
           </CardDescription>
         </CardHeader>

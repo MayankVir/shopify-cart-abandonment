@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
-import type { StoreAnalyticsView } from "@/app/actions/analytics";
 import { AnalyticsDateRangeSelect } from "@/components/dashboard/analytics-date-range-select";
 import {
   AnalyticsEmptyState,
@@ -11,26 +10,11 @@ import {
 import { CallLogPanel } from "@/components/dashboard/call-log-panel";
 import { TtaiTimeSeriesPanel } from "@/components/dashboard/ttai-time-series-panel";
 import { useStoreAnalytics } from "@/hooks/use-store-analytics";
-import { type AnalyticsDateRange } from "@/lib/analytics";
-import { Badge } from "@/components/ui/badge";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { formatDuration } from "@/lib/analytics";
-import { STATUS_VARIANT, formatCallStatus } from "@/lib/call-status";
-import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
+  analyticsDateRangeToIso,
+  type AnalyticsDateRange,
+} from "@/lib/analytics";
+import { Card, CardContent } from "@/components/ui/card";
 
 export function AnalyticsPageContent() {
   const [dateRange, setDateRange] = useState<AnalyticsDateRange>("30d");
@@ -78,8 +62,10 @@ export function AnalyticsPageContent() {
                 points={data.timeSeries}
                 scenarioName={data.scenarioName}
               />
-              <CallAttemptsTable attempts={data.attempts} summary={data.summary} />
-              <CallLogPanel />
+              <CallLogPanel
+                summary={data.summary}
+                since={analyticsDateRangeToIso(dateRange).startDate}
+              />
             </>
           )}
         </>
@@ -90,72 +76,3 @@ export function AnalyticsPageContent() {
   );
 }
 
-function CallAttemptsTable({
-  attempts,
-  summary,
-}: {
-  attempts: StoreAnalyticsView["attempts"];
-  summary: StoreAnalyticsView["summary"];
-}) {
-  return (
-    <Card className="border-border/60">
-      <CardHeader>
-        <CardTitle>Call log</CardTitle>
-        <CardDescription>
-          {summary.totalCalls} calls · {summary.totalMinutes} min consumed
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {attempts.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            No calls yet for this store.
-          </p>
-        ) : (
-          <div className="overflow-x-auto rounded-md border border-border/60">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Phone</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Cart</TableHead>
-                  <TableHead>Trigger</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {attempts.map((attempt) => (
-                  <TableRow key={attempt.id}>
-                    <TableCell className="whitespace-nowrap text-sm">
-                      {new Date(attempt.startedAt).toLocaleString([], {
-                        dateStyle: "short",
-                        timeStyle: "short",
-                      })}
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {formatPhoneNumber(attempt.customerPhone) || "—"}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={STATUS_VARIANT[attempt.status]}>
-                        {formatCallStatus(attempt.status)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {formatDuration(attempt.durationSec)}
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {formatCurrency(attempt.cartValue)}
-                    </TableCell>
-                    <TableCell className="text-sm capitalize text-muted-foreground">
-                      {attempt.trigger}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}

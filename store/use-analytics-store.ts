@@ -4,6 +4,7 @@ import { CallStatus } from "@prisma/client";
 export interface CallLogEntry {
   id: string;
   checkoutToken: string;
+  customerName: string;
   customerPhone: string;
   customerEmail: string | null;
   cartValue: number;
@@ -22,6 +23,8 @@ export interface CallLogEntry {
   repeatCustomerLastOrderAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Total dial attempts for this checkout, so retries stay visible on one row. */
+  attemptCount: number;
   latestAttempt: {
     id: string;
     transcript: string | null;
@@ -29,6 +32,8 @@ export interface CallLogEntry {
     failureReason: string | null;
     failureStage: string | null;
     durationSec: number | null;
+    trigger: string;
+    startedAt: string;
   } | null;
 }
 
