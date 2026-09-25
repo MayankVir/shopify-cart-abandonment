@@ -16,19 +16,11 @@ import {
 } from "@/lib/webhook-events";
 
 /**
- * A dial that fails never produces a transcript, so TTAI emits no
- * session.analyzed / session.extracted webhook for it — the only events this app
- * subscribes to. Those attempts would sit in DISPATCHED forever, holding a
- * concurrency slot and stalling automation, so they are polled instead.
+ * Backstop for a missed `post-session.done` webhook. That event is what closes
+ * a call; this poll only runs from the cron, and only to free a slot when the
+ * webhook never arrived.
  */
 export const STUCK_DISPATCH_MIN_AGE_MS = 3 * 60 * 1000;
-
-/**
- * Gate for the dashboard's live poll. A carrier rejection lands ~20s after
- * dispatch, and acting only on an explicit `bot_info.status === "failed"` means
- * a live call is never touched, so this can be far shorter than the cron gate.
- */
-export const ACTIVE_POLL_MIN_AGE_MS = 30 * 1000;
 
 /** Bounds API calls and runtime for one reconcile pass. */
 export const MAX_RECONCILE_PER_RUN = 10;
@@ -39,8 +31,8 @@ export interface ReconcileOptions {
   /** Maximum attempts polled in this pass. */
   limit?: number;
   /**
-   * Whether to log polls that found nothing new. Off for the 10s dashboard
-   * poll, which would otherwise write a row every tick of every live call.
+   * Whether to log polls that found nothing new. The cron logs these; a quiet
+   * pass can turn them off.
    */
   logNoChange?: boolean;
 }
@@ -72,6 +64,19 @@ export function failureFromBotInfo(
     (rawReason ? `Call failed (${rawReason})` : "Call failed at the carrier");
 
   return { callStatus: mapped, reason: message };
+}
+
+/**
+ * Outcome once `post-session.done` says the call has ended. An explicit
+ * telephony failure wins; anything else is a connected call that finished.
+ */
+export function outcomeFromSession(
+  session: TtaiSessionDetails | undefined
+): { callStatus: CallStatus; reason: string | null } | null {
+  if (!session) return null;
+  const failure = failureFromBotInfo(session.bot_info);
+  if (failure) return failure;
+  return { callStatus: CallStatus.COMPLETED, reason: null };
 }
 
 /**

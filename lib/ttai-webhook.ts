@@ -10,7 +10,8 @@ export type TtaiWebhookEventName =
   | "session.completed"
   | "session.analyzed"
   | "session.extracted"
-  | "session.terminated";
+  | "session.terminated"
+  | "post-session.done";
 
 export interface TtaiWebhookStore {
   version: typeof TTAI_WEBHOOK_STORE_VERSION;
@@ -238,17 +239,15 @@ export function hasAnalyzedAndExtractedEvents(store: TtaiWebhookStore): boolean 
   );
 }
 
-/** Fetch session API only after both webhooks arrived and events link to one call. */
+/**
+ * Fetch session details once the call has ended. `post-session.done` fires for
+ * every ending (busy, no answer, failure, and a connected call). Analysis
+ * events only fire when a transcript script ran, so they are not the signal.
+ */
 export function shouldFetchTtaiSessionDetails(store: TtaiWebhookStore): boolean {
-  if (!hasAnalyzedAndExtractedEvents(store)) {
-    return false;
-  }
-
-  if (store.sessionDetails && !store.sessionDetailsError) {
-    return false;
-  }
-
-  return validateLinkedEvents(store).ok;
+  if (!store.events["post-session.done"]) return false;
+  if (store.sessionDetails && !store.sessionDetailsError) return false;
+  return true;
 }
 
 export function getTtaiAnalysisWaitMessage(store: TtaiWebhookStore | null): string {

@@ -16,6 +16,8 @@ import { fetchUAgentsContext, isUAgentsConfigured } from "@/lib/uagents";
 import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
 import { buildSipDynamicVars, cancelSipCall, dispatchSipCall } from "@/lib/ttai";
 import { getRepeatCustomerInfo } from "@/lib/shopify-repeat-customer";
+import { findOrderPlacedAfter } from "@/lib/shopify-order-check";
+import { formatDateTimeLabel } from "@/lib/utils";
 import { hasBillableMinutes } from "@/lib/billing";
 import { sanitizeRecoveryError } from "@/lib/recovery-error";
 import { ensureAdminTokenForUpcomingCalls } from "@/lib/shopify-admin-token";
@@ -46,6 +48,9 @@ export interface RecoveryPipelineResult {
   checkoutUrl?: string;
   draftOrderId?: string;
   dispatchDurationMs?: number;
+  /** Set when the call was deliberately not placed (already ordered, duplicate cart). */
+  skipped?: boolean;
+  skipReason?: string;
 }
 
 function parseLineItems(json: Prisma.JsonValue): LineItemRecord[] {
@@ -128,6 +133,143 @@ async function persistCheckoutError(checkoutId: string, reason: string) {
   });
 }
 
+function skippedResult(
+  reason: string,
+  dispatchDurationMs: number
+): RecoveryPipelineResult {
+  return { success: false, skipped: true, skipReason: reason, dispatchDurationMs };
+}
+
+/**
+ * Closes a claimed row without placing the call. `autoCallExcluded` keeps
+ * re-enrollment from putting it back in the queue; the row stays visible in
+ * the Recovery table because its status isn't in TERMINAL_CALL_STATUSES.
+ */
+async function markCheckoutSkipped(
+  checkoutId: string,
+  status: CallStatus,
+  reason: string,
+  extra?: { supersededById?: string }
+): Promise<void> {
+  await db.abandonedCheckout.update({
+    where: { id: checkoutId },
+    data: {
+      callStatus: status,
+      callScheduled: false,
+      autoCallExcluded: true,
+      retryReason: null,
+      lastError: reason,
+      ...(extra?.supersededById ? { supersededById: extra.supersededById } : {}),
+    },
+  });
+}
+
+/**
+ * A newer or already-live cart for the same phone, if this one should stand
+ * aside. Newest wins, ties broken by createdAt then id so the outcome is stable.
+ */
+async function findDuplicateCart(
+  checkout: AbandonedCheckout,
+  phone: string,
+  abandonedAt: Date
+): Promise<{ reason: string; supersededById: string } | null> {
+  const siblings = await db.abandonedCheckout.findMany({
+    where: {
+      storeDomain: checkout.storeDomain,
+      customerPhone: phone,
+      id: { not: checkout.id },
+      callStatus: {
+        in: [CallStatus.PENDING, CallStatus.PREPARING, CallStatus.DISPATCHED],
+      },
+    },
+    select: {
+      id: true,
+      callStatus: true,
+      shopifyCreatedAt: true,
+      createdAt: true,
+    },
+  });
+
+  const live = siblings.find(
+    (sibling) =>
+      sibling.callStatus === CallStatus.PREPARING ||
+      sibling.callStatus === CallStatus.DISPATCHED
+  );
+  if (live) {
+    return {
+      supersededById: live.id,
+      reason: "Another cart for this number is already being called",
+    };
+  }
+
+  const newer = siblings.find(
+    (sibling) =>
+      sibling.callStatus === CallStatus.PENDING &&
+      isNewerCart(sibling, { abandonedAt, createdAt: checkout.createdAt, id: checkout.id })
+  );
+  if (newer) {
+    return {
+      supersededById: newer.id,
+      reason: "A newer cart from this number is queued",
+    };
+  }
+
+  return null;
+}
+
+function isNewerCart(
+  candidate: { shopifyCreatedAt: Date | null; createdAt: Date; id: string },
+  self: { abandonedAt: Date; createdAt: Date; id: string }
+): boolean {
+  const candidateAt = candidate.shopifyCreatedAt ?? candidate.createdAt;
+  const delta = candidateAt.getTime() - self.abandonedAt.getTime();
+  if (delta !== 0) return delta > 0;
+  const createdDelta = candidate.createdAt.getTime() - self.createdAt.getTime();
+  if (createdDelta !== 0) return createdDelta > 0;
+  return candidate.id > self.id;
+}
+
+/** Retire older still-pending carts for this phone so they never take a slot. */
+async function retireOlderDuplicateCarts(
+  checkout: AbandonedCheckout,
+  phone: string,
+  abandonedAt: Date
+): Promise<void> {
+  const pending = await db.abandonedCheckout.findMany({
+    where: {
+      storeDomain: checkout.storeDomain,
+      customerPhone: phone,
+      id: { not: checkout.id },
+      callStatus: CallStatus.PENDING,
+    },
+    select: { id: true, shopifyCreatedAt: true, createdAt: true },
+  });
+
+  const olderIds = pending
+    .filter(
+      (sibling) =>
+        !isNewerCart(sibling, {
+          abandonedAt,
+          createdAt: checkout.createdAt,
+          id: checkout.id,
+        })
+    )
+    .map((sibling) => sibling.id);
+  if (olderIds.length === 0) return;
+
+  await db.abandonedCheckout.updateMany({
+    where: { id: { in: olderIds } },
+    data: {
+      callStatus: CallStatus.SUPERSEDED,
+      callScheduled: false,
+      autoCallExcluded: true,
+      retryReason: null,
+      supersededById: checkout.id,
+      lastError: "A newer cart from this number is being called instead",
+    },
+  });
+}
+
 export async function runRecoveryCallPipeline(
   checkout: AbandonedCheckout & { store: Store },
   trigger: RecoveryTrigger,
@@ -176,11 +318,51 @@ export async function runRecoveryCallPipeline(
   }
   await validateStep.succeed();
 
+  const abandonedAt = checkout.shopifyCreatedAt ?? checkout.createdAt;
+  const duplicate = await findDuplicateCart(checkout, phone, abandonedAt);
+  if (duplicate) {
+    await recordPipelineEvent(ctx, "order_check", "skipped", {
+      detail: { reason: duplicate.reason },
+    });
+    await markCheckoutSkipped(checkout.id, CallStatus.SUPERSEDED, duplicate.reason, {
+      supersededById: duplicate.supersededById,
+    });
+    return skippedResult(
+      duplicate.reason,
+      Date.now() - pipelineStartedAt
+    );
+  }
+  await retireOlderDuplicateCarts(checkout, phone, abandonedAt);
+
+  if (checkout.store.orderPlacedCheckEnabled) {
+    const orderStep = startPipelineStep(ctx, "order_check");
+    const order = await findOrderPlacedAfter(checkout.store, phone, abandonedAt);
+    if (order.status === "ordered") {
+      const reason = `Order ${order.orderName} placed on ${formatDateTimeLabel(
+        order.processedAt
+      )}`;
+      await orderStep.succeed({ orderName: order.orderName });
+      await markCheckoutSkipped(checkout.id, CallStatus.ALREADY_PLACED_ORDER, reason);
+      return skippedResult(reason, Date.now() - pipelineStartedAt);
+    }
+    if (order.status === "unknown") {
+      // A failed lookup must never block a call.
+      await orderStep.skip(`Lookup failed: ${order.reason}`);
+    } else {
+      await orderStep.succeed();
+    }
+  } else {
+    await recordPipelineEvent(ctx, "order_check", "skipped", {
+      detail: { reason: "Order check disabled for this store" },
+    });
+  }
+
   const attempt = await db.callAttempt.create({
     data: {
       abandonedCheckoutId: checkout.id,
       status: CallStatus.PREPARING,
       trigger,
+      retryNumber: checkout.telephonyRetryCount,
       dynamicVarsJson: {},
     },
   });
@@ -604,10 +786,15 @@ interface DispatchFailure {
   error: string;
 }
 
+type DispatchOutcome =
+  | { kind: "dispatched" }
+  | { kind: "skipped"; reason: string }
+  | { kind: "failed"; failure: DispatchFailure };
+
 async function dispatchClaimedCheckout(
   checkout: AbandonedCheckout & { store: Store },
   storeDomain: string
-): Promise<DispatchFailure | null> {
+): Promise<DispatchOutcome> {
   const ctx: PipelineEventContext = {
     checkoutId: checkout.id,
     storeDomain,
@@ -621,7 +808,8 @@ async function dispatchClaimedCheckout(
     const result = await runRecoveryCallPipeline(checkout, "auto", {
       preClaimed: true,
     });
-    if (result.success) return null;
+    if (result.success) return { kind: "dispatched" };
+    if (result.skipped) return { kind: "skipped", reason: result.skipReason ?? "" };
 
     const failure: DispatchFailure = {
       checkoutId: checkout.id,
@@ -637,7 +825,7 @@ async function dispatchClaimedCheckout(
         dispatchDurationMs: result.dispatchDurationMs,
       })
     );
-    return failure;
+    return { kind: "failed", failure };
   } catch (error) {
     const failure: DispatchFailure = {
       checkoutId: checkout.id,
@@ -651,16 +839,17 @@ async function dispatchClaimedCheckout(
       "[process-calls] dispatch threw",
       JSON.stringify({ storeDomain, ...failure })
     );
-    return failure;
+    return { kind: "failed", failure };
   }
 }
 
 export async function processScheduledCallsForStore(storeDomain: string): Promise<{
   processed: number;
+  skipped: number;
   errors: number;
   dispatchFailures: DispatchFailure[];
 }> {
-  const empty = { processed: 0, errors: 0, dispatchFailures: [] };
+  const empty = { processed: 0, skipped: 0, errors: 0, dispatchFailures: [] };
   const store = await db.store.findUnique({ where: { storeDomain } });
   if (!store) return empty;
 
@@ -711,22 +900,28 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
   const outcomes = await Promise.all(
     due.map((checkout) => dispatchClaimedCheckout(checkout, storeDomain))
   );
-  const dispatchFailures = outcomes.filter(
-    (outcome): outcome is DispatchFailure => outcome !== null
-  );
+  const dispatchFailures = outcomes
+    .filter(
+      (outcome): outcome is Extract<DispatchOutcome, { kind: "failed" }> =>
+        outcome.kind === "failed"
+    )
+    .map((outcome) => outcome.failure);
+  const skipped = outcomes.filter((outcome) => outcome.kind === "skipped").length;
 
   console.info(
     "[process-calls] batch",
     JSON.stringify({
       storeDomain,
       claimed: due.length,
-      dispatched: due.length - dispatchFailures.length,
+      dispatched: due.length - dispatchFailures.length - skipped,
+      skipped,
       batchDurationMs: Date.now() - batchStartedAt,
     })
   );
 
   return {
-    processed: due.length - dispatchFailures.length,
+    processed: due.length - dispatchFailures.length - skipped,
+    skipped,
     errors: dispatchFailures.length,
     dispatchFailures,
   };

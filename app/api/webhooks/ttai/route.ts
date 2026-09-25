@@ -3,11 +3,12 @@ import { CallStatus, Prisma } from "@prisma/client";
 import { Webhook } from "standardwebhooks";
 import { db } from "@/lib/db";
 import { maybeScheduleTelephonyRetry } from "@/lib/call-queue";
+import { outcomeFromSession } from "@/lib/call-reconcile";
 import {
   buildCallFeedbackContext,
   writeCallFeedbackIfEnabled,
 } from "@/lib/call-feedback-sheet";
-import { mapTtaiStatusToCallStatus, buildSessionSummary, fetchTtaiSessionDetails, durationSecFromTtaiSession } from "@/lib/ttai";
+import { buildSessionSummary, fetchTtaiSessionDetails, durationSecFromTtaiSession } from "@/lib/ttai";
 import {
   minutesFromDurationSec,
   recordCallUsage,
@@ -20,7 +21,6 @@ import {
   extractTranscriptFromTtaiPayload,
   extractSessionIdentity,
   mergeTtaiWebhookStore,
-  pickString,
   shouldFetchTtaiSessionDetails,
   validateLinkedEvents,
   type TtaiWebhookEventName,
@@ -50,24 +50,9 @@ function pickNumber(...values: unknown[]): number | undefined {
   return undefined;
 }
 
-function mapEventToStatus(event: string, data: Record<string, unknown>): string {
-  const normalized = event.trim().toLowerCase();
-  if (normalized === "session.started") return "started";
-  if (normalized === "session.completed") return "completed";
-  if (normalized === "session.analyzed") return "completed";
-  if (normalized === "session.extracted") return "completed";
-  if (normalized === "session.terminated") return "terminated";
-  return pickString(data.status, data.event) ?? event;
-}
-
-function shouldUpdateTerminalStatus(event: string): boolean {
-  const normalized = event.trim().toLowerCase();
-  return (
-    normalized === "session.completed" ||
-    normalized === "session.analyzed" ||
-    normalized === "session.extracted" ||
-    normalized === "session.terminated"
-  );
+/** Fires for every ending: busy, no answer, failure, and a connected call. */
+function isCallEndedEvent(event: string): boolean {
+  return event.trim().toLowerCase() === "post-session.done";
 }
 
 export async function POST(request: NextRequest) {
@@ -216,56 +201,88 @@ export async function POST(request: NextRequest) {
     logContext.callAttemptId = ndrcAttempt.id;
     logContext.storeDomain = ndrcAttempt.order.storeDomain;
 
-    const rawStatus = mapEventToStatus(event, dataForExtraction);
-    const mappedStatus = mapTtaiStatusToCallStatus(rawStatus);
-    const updateStatus = shouldUpdateTerminalStatus(event);
-    const isTerminal = updateStatus && mappedStatus !== "DISPATCH_FAILED";
-    const endedAt = isTerminal ? new Date() : ndrcAttempt.endedAt;
+    if (!isCallEndedEvent(event)) {
+      await logEvent(
+        WEBHOOK_OUTCOMES.ACKNOWLEDGED,
+        200,
+        "stored for reference; call outcome comes from post-session.done"
+      );
+      return NextResponse.json({ ok: true, action: "acknowledged", event });
+    }
+
+    const alreadyClosed =
+      ndrcAttempt.status !== CallStatus.DISPATCHED &&
+      ndrcAttempt.status !== CallStatus.PREPARING;
+    const sessionResult = sessionId
+      ? await fetchTtaiSessionDetails(sessionId)
+      : null;
+    const outcome = outcomeFromSession(sessionResult?.session);
+
+    if (alreadyClosed || !outcome) {
+      await logEvent(
+        WEBHOOK_OUTCOMES.ACKNOWLEDGED,
+        200,
+        alreadyClosed
+          ? "call already closed"
+          : "post-session.done received but session details were unavailable"
+      );
+      return NextResponse.json({
+        ok: true,
+        action: alreadyClosed ? "already_closed" : "pending_session_details",
+      });
+    }
+
+    const endedAt = sessionResult?.session?.completed_at
+      ? new Date(sessionResult.session.completed_at)
+      : new Date();
     const durationSec =
+      durationSecFromTtaiSession(sessionResult?.session) ??
       pickNumber(
         dataForExtraction.duration_sec,
         dataForExtraction.duration_seconds,
         payload.duration_sec
       ) ??
-      (endedAt
-        ? Math.round((endedAt.getTime() - ndrcAttempt.startedAt.getTime()) / 1000)
-        : ndrcAttempt.durationSec);
+      Math.round((endedAt.getTime() - ndrcAttempt.startedAt.getTime()) / 1000);
 
     await db.$transaction([
       db.ndrcCallAttempt.update({
         where: { id: ndrcAttempt.id },
         data: {
-          status: updateStatus ? mappedStatus : ndrcAttempt.status,
+          status: outcome.callStatus,
           sessionId: sessionId || ndrcAttempt.sessionId,
-          endedAt,
+          endedAt: Number.isNaN(endedAt.getTime()) ? new Date() : endedAt,
           durationSec,
         },
       }),
       db.ndrcOrder.update({
         where: { id: ndrcAttempt.ndrcOrderId },
         data: {
-          callStatus: updateStatus ? mappedStatus : ndrcAttempt.order.callStatus,
+          callStatus: outcome.callStatus,
           sessionId: sessionId || ndrcAttempt.sessionId,
         },
       }),
     ]);
 
-    if (isTerminal && ndrcAttempt.order.store.clerkUserId && durationSec) {
+    if (ndrcAttempt.order.store.clerkUserId && durationSec) {
       await recordCallUsage({
         clerkUserId: ndrcAttempt.order.store.clerkUserId,
         minutes: minutesFromDurationSec(durationSec),
         callType: "ndrc",
         storeDomain: ndrcAttempt.order.storeDomain,
         sourceId: ndrcAttempt.id,
-        occurredAt: endedAt ?? new Date(),
+        occurredAt: Number.isNaN(endedAt.getTime()) ? new Date() : endedAt,
       });
     }
 
-    await logEvent(WEBHOOK_OUTCOMES.NDRC_UPDATED, 200, `status=${mappedStatus}`);
+    await logEvent(
+      WEBHOOK_OUTCOMES.NDRC_UPDATED,
+      200,
+      `status=${outcome.callStatus}`
+    );
     return NextResponse.json({
       ok: true,
       action: "ndrc_updated",
-      status: mappedStatus,
+      status: outcome.callStatus,
     });
   }
 
@@ -377,79 +394,118 @@ export async function POST(request: NextRequest) {
     ? buildSessionSummary(finalWebhookStore.sessionDetails)
     : undefined;
 
-  const analysisReady = Boolean(finalWebhookStore.sessionDetails);
-
   const transcript =
     sessionSummary ||
-    (analysisReady
-      ? extractTranscriptFromTtaiPayload(payload, dataForExtraction)
-      : undefined) ||
+    extractTranscriptFromTtaiPayload(payload, dataForExtraction) ||
     attempt.transcript ||
     undefined;
 
-  const rawStatus = mapEventToStatus(event, dataForExtraction);
-  const mappedStatus = mapTtaiStatusToCallStatus(rawStatus);
-  const updateStatus = shouldUpdateTerminalStatus(event);
-  const nextAttemptStatus = updateStatus ? mappedStatus : attempt.status;
-  const nextCheckoutStatus = updateStatus ? mappedStatus : attempt.checkout.callStatus;
-  const isTerminal = updateStatus && mappedStatus !== "DISPATCH_FAILED";
-  const endedAt = isTerminal ? new Date() : attempt.endedAt;
+  const storedJson = finalWebhookStore as unknown as Prisma.InputJsonValue;
+
+  // Analysis events only arrive for connected calls that ran a script. They
+  // enrich the transcript; they do not decide that the call has ended.
+  if (!isCallEndedEvent(event)) {
+    await db.$transaction([
+      db.callAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          transcript,
+          toolCallsJson: storedJson,
+          sessionId: sessionId || attempt.sessionId,
+        },
+      }),
+      db.abandonedCheckout.update({
+        where: { id: attempt.abandonedCheckoutId },
+        data: {
+          aiSummary: transcript || attempt.checkout.aiSummary,
+          sessionId: sessionId || attempt.sessionId,
+        },
+      }),
+    ]);
+    await logEvent(
+      WEBHOOK_OUTCOMES.ACKNOWLEDGED,
+      200,
+      "stored for reference; call outcome comes from post-session.done"
+    );
+    return NextResponse.json({
+      ok: true,
+      action: "acknowledged",
+      event,
+      storedEvents: Object.keys(finalWebhookStore.events),
+    });
+  }
+
+  const alreadyClosed =
+    attempt.status !== CallStatus.DISPATCHED &&
+    attempt.status !== CallStatus.PREPARING;
+  const outcome = outcomeFromSession(finalWebhookStore.sessionDetails);
+
+  if (alreadyClosed || !outcome) {
+    await db.callAttempt.update({
+      where: { id: attempt.id },
+      data: { toolCallsJson: storedJson, transcript },
+    });
+    await logEvent(
+      WEBHOOK_OUTCOMES.ACKNOWLEDGED,
+      200,
+      alreadyClosed
+        ? "call already closed"
+        : "post-session.done received but session details were unavailable"
+    );
+    return NextResponse.json({
+      ok: true,
+      action: alreadyClosed ? "already_closed" : "pending_session_details",
+      storedEvents: Object.keys(finalWebhookStore.events),
+    });
+  }
+
+  const endedAt = finalWebhookStore.sessionDetails?.completed_at
+    ? new Date(finalWebhookStore.sessionDetails.completed_at)
+    : new Date();
+  const resolvedEndedAt = Number.isNaN(endedAt.getTime()) ? new Date() : endedAt;
   const durationSec =
+    durationSecFromTtaiSession(finalWebhookStore.sessionDetails) ??
     pickNumber(
       dataForExtraction.duration_sec,
       dataForExtraction.duration_seconds,
-      payload.duration_sec,
-      durationSecFromTtaiSession(finalWebhookStore.sessionDetails)
+      payload.duration_sec
     ) ??
-    (endedAt
-      ? Math.round((endedAt.getTime() - attempt.startedAt.getTime()) / 1000)
-      : attempt.durationSec);
+    Math.round((resolvedEndedAt.getTime() - attempt.startedAt.getTime()) / 1000);
 
   await db.$transaction([
     db.callAttempt.update({
       where: { id: attempt.id },
       data: {
-        status: nextAttemptStatus,
+        status: outcome.callStatus,
         transcript,
-        toolCallsJson: finalWebhookStore as unknown as Prisma.InputJsonValue,
-        endedAt,
+        toolCallsJson: storedJson,
+        endedAt: resolvedEndedAt,
         durationSec,
-        failureReason:
-          pickString(
-            dataForExtraction.error,
-            dataForExtraction.error_message,
-            payload.error
-          ) || attempt.failureReason,
+        failureReason: outcome.reason ?? attempt.failureReason,
+        failureStage: outcome.reason ? "telephony" : attempt.failureStage,
       },
     }),
     db.abandonedCheckout.update({
       where: { id: attempt.abandonedCheckoutId },
       data: {
-        callStatus: nextCheckoutStatus,
-        aiSummary: analysisReady
-          ? transcript || attempt.checkout.aiSummary
-          : attempt.checkout.aiSummary,
+        callStatus: outcome.callStatus,
+        aiSummary: transcript || attempt.checkout.aiSummary,
         sessionId: sessionId || attempt.sessionId,
-        lastError:
-          pickString(
-            dataForExtraction.error,
-            dataForExtraction.error_message,
-            payload.error
-          ) || null,
+        lastError: outcome.reason,
       },
     }),
   ]);
 
-  if (isTerminal && attempt.trigger !== "test") {
-    await maybeScheduleTelephonyRetry({
-      checkout: attempt.checkout,
-      store: attempt.checkout.store,
-      status: mappedStatus as CallStatus,
-    });
-  }
+  const retry =
+    attempt.trigger === "test"
+      ? { retried: false }
+      : await maybeScheduleTelephonyRetry({
+          checkout: attempt.checkout,
+          store: attempt.checkout.store,
+          status: outcome.callStatus,
+        });
 
   if (
-    isTerminal &&
     attempt.checkout.store.clerkUserId &&
     durationSec &&
     attempt.trigger !== "test"
@@ -460,15 +516,17 @@ export async function POST(request: NextRequest) {
       callType: "recovery",
       storeDomain: attempt.checkout.storeDomain,
       sourceId: attempt.id,
-      occurredAt: endedAt ?? new Date(),
+      occurredAt: resolvedEndedAt,
     });
   }
 
-  if (isTerminal) {
+  // A retry is recorded on the checkout only. The sheet is written when the
+  // call is finished for good (connected, or the retry budget is used up).
+  if (!retry.retried) {
     const feedbackContext = buildCallFeedbackContext(attempt.checkout);
     const feedbackResult = await writeCallFeedbackIfEnabled(attempt.checkout.store, {
       ...feedbackContext,
-      callStatus: nextCheckoutStatus,
+      callStatus: outcome.callStatus,
       feedbackText: transcript ?? attempt.checkout.aiSummary,
     });
     if (!feedbackResult.ok && !feedbackResult.skipped) {
@@ -485,13 +543,14 @@ export async function POST(request: NextRequest) {
   await logEvent(
     WEBHOOK_OUTCOMES.UPDATED,
     200,
-    `status=${nextCheckoutStatus} terminal=${isTerminal} durationSec=${durationSec ?? "null"}`
+    `status=${outcome.callStatus} retried=${retry.retried} durationSec=${durationSec ?? "null"}`
   );
 
   return NextResponse.json({
     ok: true,
     event,
-    status: nextCheckoutStatus,
+    status: retry.retried ? CallStatus.PENDING : outcome.callStatus,
+    retried: retry.retried,
     storedEvents: Object.keys(finalWebhookStore.events),
     sessionDetailsFetched: Boolean(finalWebhookStore.sessionDetails),
     linkedSessionId: linkCheck.sessionId,
@@ -506,6 +565,7 @@ export async function GET() {
     method: "POST",
     description: "Tough Tongue AI session webhooks (Standard Webhooks)",
     events: [
+      "post-session.done",
       "session.completed",
       "session.analyzed",
       "session.extracted",

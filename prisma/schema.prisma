@@ -107,6 +107,8 @@ model Store {
   callWindowEnabled     Boolean        @default(true)
   /** When true, a call that hit a busy signal is retried once after busyRetryDelayMinutes. */
   busyRetryEnabled      Boolean        @default(true)
+  /** When true, skip a call if the customer placed a Shopify order after abandoning. */
+  orderPlacedCheckEnabled Boolean      @default(true)
   /** How long to wait before retrying a busy number (clamped to the calling window). */
   busyRetryDelayMinutes Int            @default(1440)
   /** When true, cron syncs and auto-dials due recovery rows even if the dashboard is closed. */
@@ -205,8 +207,12 @@ model AbandonedCheckout {
   autoCallExcluded  Boolean       @default(false)
   /** Pre-call auto-retry count (draft/cart/enrich/dispatch). Telephony retries are tracked separately. */
   autoRetryCount    Int           @default(0)
+  /** How many telephony retries have been scheduled for this cart. Not written to the sheet. */
+  telephonyRetryCount Int         @default(0)
   /** Telephony outcome this scheduled retry is for (e.g. "BUSY"); null when not a retry. */
   retryReason       String?
+  /** Checkout that superseded this one when it was marked SUPERSEDED. Plain column, not a relation. */
+  supersededById    String?
   shopifyCreatedAt  DateTime?
   callStatus        CallStatus    @default(PENDING)
   lastError         String?       @db.Text
@@ -243,6 +249,8 @@ model CallAttempt {
   toolCallsJson       Json              @default("[]")
   dynamicVarsJson     Json              @default("{}")
   trigger             String            @default("manual")
+  /** 0 for the first dial, 1 for the first retry, and so on. */
+  retryNumber         Int               @default(0)
   startedAt           DateTime          @default(now())
   endedAt             DateTime?
   durationSec         Int?
@@ -268,6 +276,11 @@ enum CallStatus {
   DRAFT_CREATE_FAILED
   ENRICH_FAILED
   DISPATCH_FAILED
+  /** Customer placed a Shopify order after abandoning, so no call is made.
+   *  Named so ORDER_PLACED stays free for a future "call converted" status. */
+  ALREADY_PLACED_ORDER
+  /** A newer (or already live) cart for the same phone is being called instead. */
+  SUPERSEDED
 }
 
 model CallPipelineEvent {

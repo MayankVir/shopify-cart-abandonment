@@ -77,6 +77,7 @@ export type RecoverySettingsPatch = Pick<
   | "callFeedbackKeyColumn"
   | "repeatCustomerCheckEnabled"
   | "repeatCustomerWindowDays"
+  | "orderPlacedCheckEnabled"
   | "callWindowEnabled"
   | "callWindowStartMinute"
   | "callWindowEndMinute"
@@ -162,6 +163,7 @@ export function RecoverySettings({
   const [callFeedbackSheetUrl, setCallFeedbackSheetUrl] = useState("");
   const [callFeedbackKeyColumn, setCallFeedbackKeyColumn] =
     useState("request_id");
+  const [orderPlacedCheckEnabled, setOrderPlacedCheckEnabled] = useState(true);
   const [repeatCustomerCheckEnabled, setRepeatCustomerCheckEnabled] =
     useState(false);
   const [repeatCustomerWindowDays, setRepeatCustomerWindowDays] =
@@ -208,6 +210,7 @@ export function RecoverySettings({
     setCallFeedbackSheetEnabled(settings.callFeedbackSheetEnabled ?? false);
     setCallFeedbackSheetUrl(settings.callFeedbackSheetUrl ?? "");
     setCallFeedbackKeyColumn(settings.callFeedbackKeyColumn || "request_id");
+    setOrderPlacedCheckEnabled(settings.orderPlacedCheckEnabled ?? true);
     setRepeatCustomerCheckEnabled(settings.repeatCustomerCheckEnabled ?? false);
     setRepeatCustomerWindowDays(settings.repeatCustomerWindowDays || 180);
     setCheckoutSyncMode(syncModeFromSettings(settings.checkoutSyncMode));
@@ -281,6 +284,7 @@ export function RecoverySettings({
       const repeat = await updateStoreRepeatCustomerSettings(storeDomain, {
         repeatCustomerCheckEnabled,
         repeatCustomerWindowDays,
+        orderPlacedCheckEnabled,
       });
       if (!repeat.success) {
         toast.error(repeat.error ?? "Failed to save repeat-customer settings");
@@ -312,6 +316,7 @@ export function RecoverySettings({
         callFeedbackKeyColumn,
         repeatCustomerCheckEnabled,
         repeatCustomerWindowDays,
+        orderPlacedCheckEnabled,
         callWindowEnabled,
         callWindowStartMinute: timeInputToMinutes(
           windowStart,
@@ -506,6 +511,18 @@ export function RecoverySettings({
                   <p className="col-span-2 text-xs text-muted-foreground">
                     Delay is measured from abandonment. Live calls caps how many
                     calls run at once per store.
+                  </p>
+
+                  <ToggleRow
+                    id="order-placed-check"
+                    label="Skip if customer already ordered"
+                    checked={orderPlacedCheckEnabled}
+                    onCheckedChange={setOrderPlacedCheckEnabled}
+                  />
+                  <p className="col-span-2 text-xs text-muted-foreground">
+                    Before each call, checks Shopify for an order placed by
+                    this phone number after the cart was abandoned. Rows that
+                    match stay in the queue marked “Order placed already”.
                   </p>
 
                   <ToggleRow

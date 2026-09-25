@@ -90,7 +90,7 @@ export async function schedulePreCallRetry(params: {
 export async function maybeScheduleTelephonyRetry(params: {
   checkout: Pick<
     AbandonedCheckout,
-    "id" | "autoCallExcluded" | "storeDomain"
+    "id" | "autoCallExcluded" | "storeDomain" | "telephonyRetryCount"
   >;
   store: Store;
   status: CallStatus;
@@ -112,7 +112,12 @@ export async function maybeScheduleTelephonyRetry(params: {
       status: { in: TELEPHONY_RETRY_STATUSES },
     },
   });
-  if (prior > MAX_TELEPHONY_RETRIES) {
+  // The column is the count we persist. The attempt count still guards carts
+  // that were retried before the column existed.
+  if (
+    params.checkout.telephonyRetryCount >= MAX_TELEPHONY_RETRIES ||
+    prior > MAX_TELEPHONY_RETRIES
+  ) {
     return { retried: false, scheduledCallAt: null };
   }
 
@@ -132,6 +137,7 @@ export async function maybeScheduleTelephonyRetry(params: {
       callScheduled: true,
       scheduledCallAt,
       retryReason: params.status,
+      telephonyRetryCount: { increment: 1 },
       lastError: `Retrying after ${params.status.replace(/_/g, " ").toLowerCase()}`,
     },
   });

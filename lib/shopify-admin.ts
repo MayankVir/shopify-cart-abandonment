@@ -772,6 +772,8 @@ export const FAILURE_CALL_STATUSES = [
 export function isRetryableStatus(status: string): boolean {
   return (
     status === "PENDING" ||
+    status === "ALREADY_PLACED_ORDER" ||
+    status === "SUPERSEDED" ||
     FAILURE_CALL_STATUSES.includes(status as (typeof FAILURE_CALL_STATUSES)[number])
   );
 }

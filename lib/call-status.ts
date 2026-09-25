@@ -23,6 +23,8 @@ export const STATUS_VARIANT: Record<CallStatus, BadgeVariant> = {
   DRAFT_CREATE_FAILED: "destructive",
   ENRICH_FAILED: "destructive",
   DISPATCH_FAILED: "destructive",
+  ALREADY_PLACED_ORDER: "info",
+  SUPERSEDED: "muted",
 };
 
 /** Pre-call pipeline failures — kept on CallAttempt, not on AbandonedCheckout. */
@@ -35,12 +37,23 @@ export const PRE_CALL_FAILURE_STATUSES: CallStatus[] = [
 
 export const FAILURE_STATUSES: CallStatus[] = [...PRE_CALL_FAILURE_STATUSES];
 
+/**
+ * Calls deliberately not placed: the customer already ordered, or a newer cart
+ * for the same phone is being called instead. Terminal, but not failures.
+ */
+export const SKIPPED_STATUSES: CallStatus[] = [
+  CallStatus.ALREADY_PLACED_ORDER,
+  CallStatus.SUPERSEDED,
+];
+
 const STATUS_LABELS: Partial<Record<CallStatus, string>> = {
   DRAFT_CREATE_FAILED: "Draft prep failed",
   CART_CREATE_FAILED: "Cart prep failed",
   ENRICH_FAILED: "Enrichment failed",
   /** Covers both a failed SIP dispatch and a carrier failure with no reason. */
   DISPATCH_FAILED: "Call failed",
+  ALREADY_PLACED_ORDER: "Order placed already",
+  SUPERSEDED: "Duplicate cart",
   BUSY: "Call failed - Busy",
   NO_ANSWER: "No answer",
   VOICEMAIL: "Voicemail",
@@ -163,7 +176,8 @@ export function isActiveCall(status: CallStatus): boolean {
 export function canInitiateCall(status: CallStatus): boolean {
   return (
     status === CallStatus.PENDING ||
-    FAILURE_STATUSES.includes(status)
+    FAILURE_STATUSES.includes(status) ||
+    SKIPPED_STATUSES.includes(status)
   );
 }
 

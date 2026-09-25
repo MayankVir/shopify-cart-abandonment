@@ -15,7 +15,6 @@ import {
   getStoreRecoverySettings,
   bulkStopRecoveryCallAction,
   initiateRecoveryCall,
-  reconcileInFlightCalls,
   stopRecoveryCallAction,
   syncAbandonedCheckouts,
   updateStoreAutoCallsEnabled,
@@ -62,9 +61,6 @@ import {
   formatPhoneNumber,
 } from "@/lib/utils";
 import { CallStatus } from "@prisma/client";
-
-/** How often the dashboard polls the provider for in-flight call outcomes. */
-const IN_FLIGHT_POLL_MS = 10_000;
 
 function formatScheduledWhen(scheduledCallAt: string | null): string | null {
   if (!scheduledCallAt) return null;
@@ -149,6 +145,11 @@ function CheckoutRow({
   function handleCallNow() {
     startCall(async () => {
       const result = await initiateRecoveryCall(checkout.id);
+      if (result.skipped) {
+        toast.info(result.skipReason ?? "Call skipped");
+        onRefresh();
+        return;
+      }
       if (!result.success) {
         toast.error(result.error ?? "Failed to initiate call");
         return;
@@ -397,6 +398,11 @@ export function AbandonedCheckoutsPanel() {
     if (!detailCheckout) return;
     startDetailCall(async () => {
       const result = await initiateRecoveryCall(detailCheckout.id);
+      if (result.skipped) {
+        toast.info(result.skipReason ?? "Call skipped");
+        void refreshOpenCheckouts({ silent: true });
+        return;
+      }
       if (!result.success) {
         toast.error(result.error ?? "Failed to initiate call");
         return;
@@ -496,42 +502,6 @@ export function AbandonedCheckoutsPanel() {
     }, 5_000);
 
     return () => clearInterval(interval);
-  }, [
-    selectedStoreDomain,
-    shouldLiveRefreshOpenCheckouts,
-    refreshOpenCheckouts,
-  ]);
-
-  // A carrier failure never fires an analysis webhook, so while calls are in
-  // flight we ask the provider directly instead of leaving the row DISPATCHED.
-  useEffect(() => {
-    if (!selectedStoreDomain || !shouldLiveRefreshOpenCheckouts) return;
-
-    let cancelled = false;
-    let polling = false;
-
-    async function pollInFlightCalls() {
-      if (polling || !selectedStoreDomain) return;
-      polling = true;
-      try {
-        const result = await reconcileInFlightCalls(selectedStoreDomain);
-        if (cancelled || !result.success || result.resolved === 0) return;
-        await refreshOpenCheckouts({ silent: true });
-      } catch {
-        // Transient provider or network failures retry on the next tick.
-      } finally {
-        polling = false;
-      }
-    }
-
-    const interval = setInterval(() => {
-      void pollInFlightCalls();
-    }, IN_FLIGHT_POLL_MS);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
   }, [
     selectedStoreDomain,
     shouldLiveRefreshOpenCheckouts,

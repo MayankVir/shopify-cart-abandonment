@@ -66,11 +66,6 @@ import {
 import { parseLineItems } from "@/lib/line-items";
 import { syncAbandonedCheckoutsFromSheet } from "@/lib/sheet-sync";
 import { clampRepeatCustomerWindowDays } from "@/lib/shopify-repeat-customer";
-import {
-  ACTIVE_POLL_MIN_AGE_MS,
-  reconcileStuckDispatchedCalls,
-  type ReconcileResult,
-} from "@/lib/call-reconcile";
 
 async function guardStoreAccess(storeDomain: string): Promise<string | null> {
   try {
@@ -317,35 +312,6 @@ async function applyAutoCallEnrollment(
 async function dispatchDueAutoCalls(storeDomain: string, enabled: boolean) {
   if (!enabled) return undefined;
   return processScheduledCallsForStore(storeDomain);
-}
-
-/**
- * Polls the provider for in-flight calls that have gone quiet, so a carrier
- * failure (which never produces an analysis webhook) is reflected within
- * seconds instead of waiting for the next cron run. Safe to call on a short
- * interval: it only acts on an explicit telephony failure.
- */
-export async function reconcileInFlightCalls(
-  storeDomain: string
-): Promise<ReconcileResult & { success: boolean; error?: string }> {
-  const idle = { checked: 0, resolved: 0, stillRunning: 0, errors: 0 };
-
-  const accessError = await guardStoreAccess(storeDomain);
-  if (accessError) {
-    return { success: false, ...idle, error: accessError };
-  }
-
-  const store = await db.store.findUnique({ where: { storeDomain } });
-  if (!store) {
-    return { success: false, ...idle, error: "Store not found" };
-  }
-
-  const result = await reconcileStuckDispatchedCalls(store, new Date(), {
-    minAgeMs: ACTIVE_POLL_MIN_AGE_MS,
-    logNoChange: false,
-  });
-
-  return { success: true, ...result };
 }
 
 export async function syncAbandonedCheckoutsForStore(
@@ -603,6 +569,9 @@ export async function initiateRecoveryCall(
 ): Promise<{
   success: boolean;
   error?: string;
+  /** Set when the call was deliberately not placed (already ordered, duplicate cart). */
+  skipped?: boolean;
+  skipReason?: string;
   checkoutUrl?: string;
   draftOrderId?: string;
   dispatchDurationMs?: number;
@@ -654,6 +623,8 @@ export async function initiateRecoveryCall(
   return {
     success: result.success,
     error: result.error,
+    skipped: result.skipped,
+    skipReason: result.skipReason,
     checkoutUrl: result.checkoutUrl,
     draftOrderId: result.draftOrderId,
     dispatchDurationMs: result.dispatchDurationMs,
@@ -966,6 +937,7 @@ export async function getStoreRecoverySettings(storeDomain: string) {
       callFeedbackKeyColumn: true,
       repeatCustomerCheckEnabled: true,
       repeatCustomerWindowDays: true,
+      orderPlacedCheckEnabled: true,
       ttaiScenarioId: true,
       ttaiTrunkId: true,
       ianaTimezone: true,
@@ -1173,6 +1145,7 @@ export async function updateStoreRepeatCustomerSettings(
   input: {
     repeatCustomerCheckEnabled: boolean;
     repeatCustomerWindowDays: number;
+    orderPlacedCheckEnabled: boolean;
   }
 ): Promise<{ success: boolean; error?: string }> {
   const accessError = await guardStoreAccess(storeDomain);
@@ -1188,6 +1161,7 @@ export async function updateStoreRepeatCustomerSettings(
       data: {
         repeatCustomerCheckEnabled: input.repeatCustomerCheckEnabled,
         repeatCustomerWindowDays: windowDays,
+        orderPlacedCheckEnabled: input.orderPlacedCheckEnabled,
       },
     });
     revalidatePath("/dashboard/recovery");
