@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { Fragment, useCallback, useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
+  CalendarClock,
   Loader2,
   MoreHorizontal,
   Phone,
@@ -13,6 +14,7 @@ import {
 import {
   getAbandonedCheckoutsForStore,
   getStoreRecoverySettings,
+  bulkScheduleCheckoutsAction,
   bulkStopRecoveryCallAction,
   initiateRecoveryCall,
   stopRecoveryCallAction,
@@ -25,12 +27,22 @@ import { formatTimeUntilCall } from "@/lib/shopify-admin";
 import {
   canEditSchedule,
   canInitiateCall,
+  canSelectCheckout,
   canStopCall,
   displayCheckoutStatus,
   isActiveCall,
 } from "@/lib/call-status";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
@@ -57,6 +69,7 @@ import { Switch } from "@/components/ui/switch";
 import { formatDurationMs } from "@/lib/call-pipeline-events";
 import {
   formatCurrency,
+  formatDateLabel,
   formatDateTimeLabel,
   formatPhoneNumber,
 } from "@/lib/utils";
@@ -65,6 +78,10 @@ import { CallStatus } from "@prisma/client";
 function formatScheduledWhen(scheduledCallAt: string | null): string | null {
   if (!scheduledCallAt) return null;
   return formatDateTimeLabel(scheduledCallAt);
+}
+
+function abandonmentDateLabel(shopifyCreatedAt: string | null): string {
+  return shopifyCreatedAt ? formatDateLabel(shopifyCreatedAt) : "No date";
 }
 
 function ScheduleCell({
@@ -187,6 +204,11 @@ function CheckoutRow({
           </p>
         </div>
       </TableCell>
+      <TableCell className="px-3 py-2 text-sm tabular-nums text-muted-foreground">
+        {checkout.shopifyCreatedAt
+          ? formatDateTimeLabel(checkout.shopifyCreatedAt)
+          : "—"}
+      </TableCell>
       <TableCell className="px-3 py-2 text-sm font-medium tabular-nums">
         {formatCurrency(checkout.cartValue)}
       </TableCell>
@@ -246,6 +268,9 @@ export function AbandonedCheckoutsPanel() {
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [isBulkStopping, startBulkStop] = useTransition();
+  const [isBulkScheduling, startBulkSchedule] = useTransition();
+  const [showBulkSchedule, setShowBulkSchedule] = useState(false);
+  const [bulkScheduleValue, setBulkScheduleValue] = useState("");
   const [totalCount, setTotalCount] = useState(0);
   const [shopifyPageInfo, setShopifyPageInfo] = useState<{
     hasNextPage: boolean;
@@ -269,13 +294,22 @@ export function AbandonedCheckoutsPanel() {
   const [isDetailStopping, startDetailStop] = useTransition();
 
   const selectableCheckouts = checkouts.filter((checkout) =>
-    canStopCall(checkout.callStatus, checkout.callScheduled),
+    canSelectCheckout(
+      checkout.callStatus,
+      checkout.callScheduled,
+      checkout.customerPhone,
+    ),
   );
   const selectedCount = selectedIds.size;
   const selectedCanRemove = checkouts.some(
     (checkout) =>
       selectedIds.has(checkout.id) &&
       canStopCall(checkout.callStatus, checkout.callScheduled),
+  );
+  const selectedCanSchedule = checkouts.some(
+    (checkout) =>
+      selectedIds.has(checkout.id) &&
+      canEditSchedule(checkout.callStatus, checkout.customerPhone),
   );
   const allSelectableSelected =
     selectableCheckouts.length > 0 &&
@@ -340,6 +374,29 @@ export function AbandonedCheckoutsPanel() {
       const next = new Set(current);
       if (selected) next.add(checkoutId);
       else next.delete(checkoutId);
+      return next;
+    });
+  }
+
+  function toggleDateSelection(dateLabel: string, selected: boolean) {
+    const ids = checkouts
+      .filter(
+        (checkout) =>
+          abandonmentDateLabel(checkout.shopifyCreatedAt) === dateLabel &&
+          canSelectCheckout(
+            checkout.callStatus,
+            checkout.callScheduled,
+            checkout.customerPhone,
+          ),
+      )
+      .map((checkout) => checkout.id);
+
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const id of ids) {
+        if (selected) next.add(id);
+        else next.delete(id);
+      }
       return next;
     });
   }
@@ -429,6 +486,52 @@ export function AbandonedCheckoutsPanel() {
           ? "Call stopped"
           : "Schedule removed",
       );
+      void refreshOpenCheckouts({ silent: true });
+    });
+  }
+
+  function openBulkSchedule() {
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const next = new Date(Date.now() + 15 * 60 * 1000);
+    setBulkScheduleValue(
+      `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}T${pad(next.getHours())}:${pad(next.getMinutes())}`,
+    );
+    setShowBulkSchedule(true);
+  }
+
+  function handleBulkSchedule(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedStoreDomain || selectedCount === 0 || !bulkScheduleValue) return;
+
+    const next = new Date(bulkScheduleValue);
+    if (Number.isNaN(next.getTime())) {
+      toast.error("Enter a valid date and time");
+      return;
+    }
+
+    startBulkSchedule(async () => {
+      const result = await bulkScheduleCheckoutsAction(
+        selectedStoreDomain,
+        Array.from(selectedIds),
+        next.toISOString(),
+      );
+      if (!result.success && result.scheduled === 0) {
+        toast.error(result.error ?? "Failed to schedule calls");
+        return;
+      }
+      if (result.failed > 0) {
+        toast.warning(
+          `Scheduled ${result.scheduled}. ${result.failed} could not be scheduled.`,
+        );
+      } else {
+        toast.success(
+          result.scheduled === 1
+            ? "Call scheduled"
+            : `Scheduled ${result.scheduled} calls`,
+        );
+      }
+      setShowBulkSchedule(false);
+      setSelectedIds(new Set());
       void refreshOpenCheckouts({ silent: true });
     });
   }
@@ -616,6 +719,46 @@ export function AbandonedCheckoutsPanel() {
           onOpenChange={setShowSettings}
           onSettingsChange={handleRecoverySettingsChange}
         />
+        <Dialog open={showBulkSchedule} onOpenChange={setShowBulkSchedule}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Schedule selected calls</DialogTitle>
+              <DialogDescription>
+                {selectedCount === 1
+                  ? "Choose when to call this checkout. It is dialed even if auto-call is off."
+                  : `Choose when to call ${selectedCount} checkouts. They are dialed even if auto-call is off.`}
+              </DialogDescription>
+            </DialogHeader>
+            <form id="bulk-schedule-form" onSubmit={handleBulkSchedule} className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="bulk-scheduled-at">Call time</Label>
+                <Input
+                  id="bulk-scheduled-at"
+                  type="datetime-local"
+                  value={bulkScheduleValue}
+                  onChange={(event) => setBulkScheduleValue(event.target.value)}
+                  required
+                />
+              </div>
+            </form>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowBulkSchedule(false)}
+                disabled={isBulkScheduling}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" form="bulk-schedule-form" disabled={isBulkScheduling}>
+                {isBulkScheduling ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Schedule
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <EditCheckoutScheduleDialog
           checkout={editingCheckout}
           open={editingCheckout !== null}
@@ -702,9 +845,21 @@ export function AbandonedCheckoutsPanel() {
                 </span>
                 <Button
                   size="sm"
+                  onClick={openBulkSchedule}
+                  disabled={isBulkScheduling || isBulkStopping || !selectedCanSchedule}
+                >
+                  {isBulkScheduling ? (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  ) : (
+                    <CalendarClock className="mr-1 h-3 w-3" />
+                  )}
+                  Schedule
+                </Button>
+                <Button
+                  size="sm"
                   variant="destructive"
                   onClick={handleBulkCancelSchedule}
-                  disabled={isBulkStopping || !selectedCanRemove}
+                  disabled={isBulkStopping || isBulkScheduling || !selectedCanRemove}
                 >
                   {isBulkStopping ? (
                     <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -735,11 +890,14 @@ export function AbandonedCheckoutsPanel() {
                         }
                         disabled={selectableCheckouts.length === 0}
                         onCheckedChange={toggleSelectAllStoppable}
-                        aria-label="Select all scheduled or pending checkouts"
+                        aria-label="Select all checkouts that can be scheduled or updated"
                       />
                     </TableHead>
                     <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
                       Customer
+                    </TableHead>
+                    <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
+                      Abandoned
                     </TableHead>
                     <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
                       Value
@@ -756,25 +914,76 @@ export function AbandonedCheckoutsPanel() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {checkouts.map((checkout) => (
-                    <CheckoutRow
-                      key={checkout.id}
-                      checkout={checkout}
-                      selectable={canStopCall(
-                        checkout.callStatus,
-                        checkout.callScheduled,
-                      )}
-                      selected={selectedIds.has(checkout.id)}
-                      autoCallsEnabled={autoCallsEnabled}
-                      onSelectedChange={(selected) =>
-                        toggleCheckoutSelection(checkout.id, selected)
-                      }
-                      onOpenDetails={() => setDetailCheckout(checkout)}
-                      onRefresh={() => {
-                        void refreshOpenCheckouts({ silent: true });
-                      }}
-                    />
-                  ))}
+                  {checkouts.map((checkout, index) => {
+                    const dateLabel = abandonmentDateLabel(checkout.shopifyCreatedAt);
+                    const previous = index > 0 ? checkouts[index - 1] : null;
+                    const previousLabel = previous
+                      ? abandonmentDateLabel(previous.shopifyCreatedAt)
+                      : null;
+                    const dateCheckouts = checkouts.filter(
+                      (row) =>
+                        abandonmentDateLabel(row.shopifyCreatedAt) === dateLabel &&
+                        canSelectCheckout(
+                          row.callStatus,
+                          row.callScheduled,
+                          row.customerPhone,
+                        ),
+                    );
+                    const selectedOnDate = dateCheckouts.filter((row) =>
+                      selectedIds.has(row.id),
+                    ).length;
+                    const allOnDateSelected =
+                      dateCheckouts.length > 0 &&
+                      selectedOnDate === dateCheckouts.length;
+
+                    return (
+                      <Fragment key={checkout.id}>
+                        {dateLabel !== previousLabel ? (
+                          <TableRow className="hover:bg-transparent">
+                            <TableCell className="border-y border-border bg-muted/40 px-3 py-1.5">
+                              <Checkbox
+                                checked={
+                                  selectedOnDate > 0 && !allOnDateSelected
+                                    ? "indeterminate"
+                                    : allOnDateSelected
+                                }
+                                disabled={dateCheckouts.length === 0}
+                                onCheckedChange={(checked) =>
+                                  toggleDateSelection(dateLabel, checked === true)
+                                }
+                                aria-label={`Select all checkouts from ${dateLabel}`}
+                              />
+                            </TableCell>
+                            <TableCell
+                              colSpan={6}
+                              className="border-y border-border bg-muted/40 px-3 py-1.5"
+                            >
+                              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                                {dateLabel}
+                              </span>
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                        <CheckoutRow
+                          checkout={checkout}
+                          selectable={canSelectCheckout(
+                            checkout.callStatus,
+                            checkout.callScheduled,
+                            checkout.customerPhone,
+                          )}
+                          selected={selectedIds.has(checkout.id)}
+                          autoCallsEnabled={autoCallsEnabled}
+                          onSelectedChange={(selected) =>
+                            toggleCheckoutSelection(checkout.id, selected)
+                          }
+                          onOpenDetails={() => setDetailCheckout(checkout)}
+                          onRefresh={() => {
+                            void refreshOpenCheckouts({ silent: true });
+                          }}
+                        />
+                      </Fragment>
+                    );
+                  })}
                 </TableBody>
               </Table>
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3">

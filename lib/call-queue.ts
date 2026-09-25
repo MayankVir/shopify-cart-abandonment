@@ -317,8 +317,6 @@ export async function claimDueAutoCalls(
   store: Store,
   now: Date = new Date()
 ): Promise<Array<AbandonedCheckout & { store: Store }>> {
-  if (!store.autoCallsEnabled) return [];
-
   const window = callWindowFromStore(store);
   await requeueStalePreparingCalls(store, now);
   await deferOffWindowDueCalls(store, now);

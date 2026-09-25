@@ -164,112 +164,6 @@ async function markCheckoutSkipped(
   });
 }
 
-/**
- * A newer or already-live cart for the same phone, if this one should stand
- * aside. Newest wins, ties broken by createdAt then id so the outcome is stable.
- */
-async function findDuplicateCart(
-  checkout: AbandonedCheckout,
-  phone: string,
-  abandonedAt: Date
-): Promise<{ reason: string; supersededById: string } | null> {
-  const siblings = await db.abandonedCheckout.findMany({
-    where: {
-      storeDomain: checkout.storeDomain,
-      customerPhone: phone,
-      id: { not: checkout.id },
-      callStatus: {
-        in: [CallStatus.PENDING, CallStatus.PREPARING, CallStatus.DISPATCHED],
-      },
-    },
-    select: {
-      id: true,
-      callStatus: true,
-      shopifyCreatedAt: true,
-      createdAt: true,
-    },
-  });
-
-  const live = siblings.find(
-    (sibling) =>
-      sibling.callStatus === CallStatus.PREPARING ||
-      sibling.callStatus === CallStatus.DISPATCHED
-  );
-  if (live) {
-    return {
-      supersededById: live.id,
-      reason: "Another cart for this number is already being called",
-    };
-  }
-
-  const newer = siblings.find(
-    (sibling) =>
-      sibling.callStatus === CallStatus.PENDING &&
-      isNewerCart(sibling, { abandonedAt, createdAt: checkout.createdAt, id: checkout.id })
-  );
-  if (newer) {
-    return {
-      supersededById: newer.id,
-      reason: "A newer cart from this number is queued",
-    };
-  }
-
-  return null;
-}
-
-function isNewerCart(
-  candidate: { shopifyCreatedAt: Date | null; createdAt: Date; id: string },
-  self: { abandonedAt: Date; createdAt: Date; id: string }
-): boolean {
-  const candidateAt = candidate.shopifyCreatedAt ?? candidate.createdAt;
-  const delta = candidateAt.getTime() - self.abandonedAt.getTime();
-  if (delta !== 0) return delta > 0;
-  const createdDelta = candidate.createdAt.getTime() - self.createdAt.getTime();
-  if (createdDelta !== 0) return createdDelta > 0;
-  return candidate.id > self.id;
-}
-
-/** Retire older still-pending carts for this phone so they never take a slot. */
-async function retireOlderDuplicateCarts(
-  checkout: AbandonedCheckout,
-  phone: string,
-  abandonedAt: Date
-): Promise<void> {
-  const pending = await db.abandonedCheckout.findMany({
-    where: {
-      storeDomain: checkout.storeDomain,
-      customerPhone: phone,
-      id: { not: checkout.id },
-      callStatus: CallStatus.PENDING,
-    },
-    select: { id: true, shopifyCreatedAt: true, createdAt: true },
-  });
-
-  const olderIds = pending
-    .filter(
-      (sibling) =>
-        !isNewerCart(sibling, {
-          abandonedAt,
-          createdAt: checkout.createdAt,
-          id: checkout.id,
-        })
-    )
-    .map((sibling) => sibling.id);
-  if (olderIds.length === 0) return;
-
-  await db.abandonedCheckout.updateMany({
-    where: { id: { in: olderIds } },
-    data: {
-      callStatus: CallStatus.SUPERSEDED,
-      callScheduled: false,
-      autoCallExcluded: true,
-      retryReason: null,
-      supersededById: checkout.id,
-      lastError: "A newer cart from this number is being called instead",
-    },
-  });
-}
-
 export async function runRecoveryCallPipeline(
   checkout: AbandonedCheckout & { store: Store },
   trigger: RecoveryTrigger,
@@ -319,20 +213,6 @@ export async function runRecoveryCallPipeline(
   await validateStep.succeed();
 
   const abandonedAt = checkout.shopifyCreatedAt ?? checkout.createdAt;
-  const duplicate = await findDuplicateCart(checkout, phone, abandonedAt);
-  if (duplicate) {
-    await recordPipelineEvent(ctx, "order_check", "skipped", {
-      detail: { reason: duplicate.reason },
-    });
-    await markCheckoutSkipped(checkout.id, CallStatus.SUPERSEDED, duplicate.reason, {
-      supersededById: duplicate.supersededById,
-    });
-    return skippedResult(
-      duplicate.reason,
-      Date.now() - pipelineStartedAt
-    );
-  }
-  await retireOlderDuplicateCarts(checkout, phone, abandonedAt);
 
   if (checkout.store.orderPlacedCheckEnabled) {
     const orderStep = startPipelineStep(ctx, "order_check");
@@ -863,8 +743,6 @@ export async function processScheduledCallsForStore(storeDomain: string): Promis
       JSON.stringify({ storeDomain, ...reconciled })
     );
   }
-
-  if (!store.autoCallsEnabled) return empty;
 
   const concurrency = sipConcurrencySlots(store.sipConcurrency);
   const upcomingForToken = await db.abandonedCheckout.findMany({

@@ -7,7 +7,8 @@ export type BadgeVariant =
   | "success"
   | "warning"
   | "info"
-  | "muted";
+  | "muted"
+  | "soft";
 
 export const STATUS_VARIANT: Record<CallStatus, BadgeVariant> = {
   PENDING: "muted",
@@ -24,7 +25,7 @@ export const STATUS_VARIANT: Record<CallStatus, BadgeVariant> = {
   ENRICH_FAILED: "destructive",
   DISPATCH_FAILED: "destructive",
   ALREADY_PLACED_ORDER: "info",
-  SUPERSEDED: "muted",
+  SUPERSEDED: "soft",
 };
 
 /** Pre-call pipeline failures — kept on CallAttempt, not on AbandonedCheckout. */
@@ -176,6 +177,7 @@ export function isActiveCall(status: CallStatus): boolean {
 export function canInitiateCall(status: CallStatus): boolean {
   return (
     status === CallStatus.PENDING ||
+    status === CallStatus.BUSY ||
     FAILURE_STATUSES.includes(status) ||
     SKIPPED_STATUSES.includes(status)
   );
@@ -185,11 +187,22 @@ export function canStopCall(status: CallStatus, callScheduled: boolean): boolean
   return isActiveCall(status) || (status === CallStatus.PENDING && callScheduled);
 }
 
+export function canSelectCheckout(
+  status: CallStatus,
+  callScheduled: boolean,
+  phone: string | null | undefined
+): boolean {
+  return canEditSchedule(status, phone) || canStopCall(status, callScheduled);
+}
+
 export function canEditSchedule(
   status: CallStatus,
   phone: string | null | undefined
 ): boolean {
-  return status === CallStatus.PENDING && Boolean(phone?.trim());
+  return (
+    (status === CallStatus.PENDING || status === CallStatus.BUSY) &&
+    Boolean(phone?.trim())
+  );
 }
 
 export function shouldScheduleAutoCall(

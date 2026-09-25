@@ -653,8 +653,8 @@ export async function updateCheckoutScheduleAction(
   if (!canEditSchedule(checkout.callStatus, checkout.customerPhone)) {
     return {
       success: false,
-      error: checkout.callStatus !== CallStatus.PENDING
-        ? "Only pending checkouts can have their schedule changed"
+      error: checkout.callStatus !== CallStatus.PENDING && checkout.callStatus !== CallStatus.BUSY
+        ? "Only pending or busy checkouts can have their schedule changed"
         : "A phone number is required to schedule a call",
     };
   }
@@ -686,6 +686,7 @@ export async function updateCheckoutScheduleAction(
     data: {
       scheduledCallAt,
       callScheduled: true,
+      callStatus: CallStatus.PENDING,
       autoCallExcluded: false,
     },
   });
@@ -695,6 +696,80 @@ export async function updateCheckoutScheduleAction(
   revalidatePath("/dashboard/recovery");
 
   return { success: true, scheduledCallAt: scheduledCallAt.toISOString() };
+}
+
+export async function bulkScheduleCheckoutsAction(
+  storeDomain: string,
+  checkoutIds: string[],
+  scheduledCallAtIso: string
+): Promise<{
+  success: boolean;
+  scheduled: number;
+  failed: number;
+  error?: string;
+  scheduledCallAt?: string;
+}> {
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, scheduled: 0, failed: 0, error: accessError };
+  }
+
+  if (checkoutIds.length === 0) {
+    return { success: true, scheduled: 0, failed: 0 };
+  }
+
+  const store = await db.store.findUnique({ where: { storeDomain } });
+  if (!store) {
+    return { success: false, scheduled: 0, failed: 0, error: "Store not found" };
+  }
+
+  const requested = new Date(scheduledCallAtIso);
+  if (Number.isNaN(requested.getTime())) {
+    return { success: false, scheduled: 0, failed: 0, error: "Enter a valid date and time" };
+  }
+
+  const scheduledCallAt = clampToCallWindow(requested, callWindowFromStore(store));
+  if (scheduledCallAt.getTime() - Date.now() > MAX_SCHEDULE_AHEAD_MS) {
+    return {
+      success: false,
+      scheduled: 0,
+      failed: 0,
+      error: "Schedule time cannot be more than 30 days from now",
+    };
+  }
+
+  const checkouts = await db.abandonedCheckout.findMany({
+    where: { id: { in: checkoutIds }, storeDomain },
+    select: { id: true, callStatus: true, customerPhone: true },
+  });
+  const eligibleIds = checkouts
+    .filter((checkout) => canEditSchedule(checkout.callStatus, checkout.customerPhone))
+    .map((checkout) => checkout.id);
+
+  if (eligibleIds.length > 0) {
+    await db.abandonedCheckout.updateMany({
+      where: { id: { in: eligibleIds } },
+      data: {
+        scheduledCallAt,
+        callScheduled: true,
+        callStatus: CallStatus.PENDING,
+        autoCallExcluded: false,
+      },
+    });
+  }
+
+  revalidatePath("/dashboard/recovery");
+
+  return {
+    success: eligibleIds.length > 0,
+    scheduled: eligibleIds.length,
+    failed: checkoutIds.length - eligibleIds.length,
+    scheduledCallAt: scheduledCallAt.toISOString(),
+    error:
+      eligibleIds.length === 0
+        ? "Only pending or busy checkouts with a phone number can be scheduled"
+        : undefined,
+  };
 }
 
 export async function updateCheckoutCustomerNameAction(
@@ -1320,7 +1395,19 @@ export async function runAutoCallCron(): Promise<{
   errors: number;
 }> {
   const stores = await db.store.findMany({
-    where: { autoCallsEnabled: true },
+    where: {
+      OR: [
+        { autoCallsEnabled: true },
+        {
+          checkouts: {
+            some: {
+              callStatus: CallStatus.PENDING,
+              callScheduled: true,
+            },
+          },
+        },
+      ],
+    },
   });
   let synced = 0;
   let processed = 0;
@@ -1372,7 +1459,10 @@ export async function runAutoCallCron(): Promise<{
       );
     }
 
-    if (store.checkoutSyncMode !== CheckoutSyncMode.WEBHOOK) {
+    if (
+      store.autoCallsEnabled &&
+      store.checkoutSyncMode !== CheckoutSyncMode.WEBHOOK
+    ) {
       const syncResult = await syncAbandonedCheckoutsForStore(store);
       syncOk = syncResult.success;
       if (syncResult.success) synced += 1;

@@ -13,6 +13,7 @@ import { nextCallScheduledFlag } from "@/lib/call-status";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
 import { callWindowFromStore } from "@/lib/call-window";
 import { mergeIncomingUserContext } from "@/lib/user-context";
+import { supersedeRepeatCarts } from "@/lib/repeat-carts";
 import { parseSheetUrl, sheetGvizRangeUrl } from "@/lib/sheet-url";
 import {
   SHEET_SYNC_DIRECTIONS,
@@ -572,7 +573,9 @@ export function parseSheetRow(record: Record<string, string>): ParsedSheetRow | 
     recoveryUrl: record.abc_url?.trim() || "",
     lineItems: parseLineItemsFromSheet(record),
     shopifyCreatedAt: parseDate(record.created_at || ""),
-    abandonedAt: parseDate(record.updated_at || record.timestamp_incoming_webhook || ""),
+    // Webhook time is when the cart was abandoned. updated_at is a few minutes
+    // later and reshuffles the recovery table on every sync.
+    abandonedAt: parseDate(record.timestamp_incoming_webhook || record.created_at || ""),
     isAbandoned: true,
     dropOffStage: record.drop_off_stage?.trim() || "",
     cartItemsSummary: record.cart_items?.trim() || "",
@@ -696,6 +699,7 @@ export async function syncAbandonedCheckoutsFromSheet(
 
   let synced = 0;
   let skipped = 0;
+  const syncedPhones: string[] = [];
 
   for (const row of rows) {
     if (!row.lineItems.some((item) => item.variant_gid)) {
@@ -790,6 +794,17 @@ export async function syncAbandonedCheckoutsFromSheet(
     }
 
     synced++;
+    syncedPhones.push(row.customerPhone);
+  }
+
+  if (syncedPhones.length > 0) {
+    const superseded = await supersedeRepeatCarts(store, syncedPhones);
+    if (superseded > 0) {
+      console.info(
+        "[sheet] superseded repeat carts",
+        JSON.stringify({ storeDomain: store.storeDomain, superseded })
+      );
+    }
   }
 
   await db.store.update({
