@@ -10,6 +10,11 @@ import {
 import { recordPipelineEvent } from "@/lib/call-pipeline-events";
 import { sanitizeRecoveryError } from "@/lib/recovery-error";
 import {
+  callStatusesForEnrollment,
+  DEFAULT_AUTO_CALL_ENROLLMENT,
+  type AutoCallEnrollmentSelection,
+} from "@/lib/call-status";
+import {
   BUSY_TERMINAL_ERROR,
   clampBusyRetryDelayMinutes,
 } from "@/lib/busy-retry";
@@ -412,23 +417,19 @@ export async function markQueueClaimed(
   );
 }
 
-const ENROLLABLE_CALL_STATUSES: CallStatus[] = [
-  CallStatus.PENDING,
-  CallStatus.CART_CREATE_FAILED,
-  CallStatus.DRAFT_CREATE_FAILED,
-  CallStatus.ENRICH_FAILED,
-  CallStatus.DISPATCH_FAILED,
-];
-
 export async function enrollOpenCheckoutsForAutoCall(
   store: Store,
-  now: Date = new Date()
+  now: Date = new Date(),
+  selection: AutoCallEnrollmentSelection = DEFAULT_AUTO_CALL_ENROLLMENT
 ): Promise<number> {
+  const statuses = callStatusesForEnrollment(selection);
+  if (statuses.length === 0) return 0;
+
   const scheduledCallAt = clampToCallWindow(now, callWindowFromStore(store));
   const open = await db.abandonedCheckout.findMany({
     where: {
       storeDomain: store.storeDomain,
-      callStatus: { in: ENROLLABLE_CALL_STATUSES },
+      callStatus: { in: statuses },
     },
     select: { id: true, customerPhone: true },
   });

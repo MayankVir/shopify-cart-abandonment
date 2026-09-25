@@ -8,6 +8,7 @@ import {
   canScheduleCallback,
   canStopCall,
   nextCallScheduledFlag,
+  type AutoCallEnrollmentSelection,
 } from "@/lib/call-status";
 import {
   type CheckoutSyncModeValue,
@@ -325,12 +326,13 @@ export async function getAbandonedCheckoutsForStore(
 
 async function applyAutoCallEnrollment(
   storeDomain: string,
-  enabled: boolean
+  enabled: boolean,
+  selection?: AutoCallEnrollmentSelection
 ): Promise<number> {
   if (enabled) {
     const store = await db.store.findUnique({ where: { storeDomain } });
     if (!store) return 0;
-    return enrollOpenCheckoutsForAutoCall(store);
+    return enrollOpenCheckoutsForAutoCall(store, new Date(), selection);
   }
 
   await unschedulePendingAutoCalls(storeDomain);
@@ -1301,7 +1303,8 @@ export async function updateStoreRecoverySettings(
     callWindowStartMinute?: number;
     callWindowEndMinute?: number;
     ianaTimezoneOverride?: string;
-  }
+  },
+  enrollment?: AutoCallEnrollmentSelection
 ): Promise<{ success: boolean; error?: string; enrolled?: number }> {
   const accessError = await guardStoreAccess(storeDomain);
   if (accessError) {
@@ -1343,6 +1346,14 @@ export async function updateStoreRecoverySettings(
     return { success: false, error: "Enter a valid IANA timezone" };
   }
 
+  const existingStore = await db.store.findUnique({
+    where: { storeDomain },
+    select: { autoCallsEnabled: true },
+  });
+  if (!existingStore) {
+    return { success: false, error: "Store not found" };
+  }
+
   await db.store.update({
     where: { storeDomain },
     data: {
@@ -1361,8 +1372,12 @@ export async function updateStoreRecoverySettings(
   });
 
   let enrolled = 0;
-  if (autoCallsEnabled !== undefined) {
-    enrolled = await applyAutoCallEnrollment(storeDomain, autoCallsEnabled);
+  const turningOn = autoCallsEnabled === true && !existingStore.autoCallsEnabled;
+  const turningOff = autoCallsEnabled === false && existingStore.autoCallsEnabled;
+  if (turningOn) {
+    enrolled = await applyAutoCallEnrollment(storeDomain, true, enrollment);
+  } else if (turningOff) {
+    await applyAutoCallEnrollment(storeDomain, false);
   }
 
   revalidatePath("/dashboard/recovery");
@@ -1371,7 +1386,8 @@ export async function updateStoreRecoverySettings(
 
 export async function updateStoreAutoCallsEnabled(
   storeDomain: string,
-  enabled: boolean
+  enabled: boolean,
+  enrollment?: AutoCallEnrollmentSelection
 ): Promise<{ success: boolean; error?: string; enrolled?: number }> {
   const accessError = await guardStoreAccess(storeDomain);
   if (accessError) {
@@ -1382,7 +1398,7 @@ export async function updateStoreAutoCallsEnabled(
     where: { storeDomain },
     data: { autoCallsEnabled: enabled },
   });
-  const enrolled = await applyAutoCallEnrollment(storeDomain, enabled);
+  const enrolled = await applyAutoCallEnrollment(storeDomain, enabled, enrollment);
 
   revalidatePath("/dashboard/recovery");
   return { success: true, enrolled };

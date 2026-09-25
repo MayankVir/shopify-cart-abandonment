@@ -30,6 +30,7 @@ import {
   canScheduleCallback,
   canSelectCheckout,
   canStopCall,
+  type AutoCallEnrollmentSelection,
   displayCheckoutStatus,
   isActiveCall,
 } from "@/lib/call-status";
@@ -60,6 +61,7 @@ import {
 import { CheckoutDetailDrawer } from "@/components/dashboard/checkout-detail-drawer";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { EditCheckoutScheduleDialog } from "@/components/dashboard/edit-checkout-schedule-dialog";
+import { AutoCallEnrollmentDialog } from "@/components/dashboard/auto-call-enrollment-dialog";
 import {
   RecoverySettings,
   type RecoverySettingsPatch,
@@ -318,6 +320,7 @@ export function AbandonedCheckoutsPanel() {
   const [settingsReady, setSettingsReady] = useState(false);
   const [autoCallsEnabled, setAutoCallsEnabled] = useState(false);
   const [isTogglingAutoCalls, startToggleAutoCalls] = useTransition();
+  const [showAutoCallEnrollment, setShowAutoCallEnrollment] = useState(false);
   const [editingCheckout, setEditingCheckout] =
     useState<AbandonedCheckoutRow | null>(null);
   const [detailCheckout, setDetailCheckout] =
@@ -685,17 +688,22 @@ export function AbandonedCheckoutsPanel() {
     void refreshOpenCheckouts({ silent: true });
   }
 
-  function handleAutoCallToggle(enabled: boolean) {
+  function commitAutoCalls(
+    enabled: boolean,
+    enrollment?: AutoCallEnrollmentSelection,
+  ) {
     if (!selectedStoreDomain || isTogglingAutoCalls) return;
     startToggleAutoCalls(async () => {
       const result = await updateStoreAutoCallsEnabled(
         selectedStoreDomain,
         enabled,
+        enrollment,
       );
       if (!result.success) {
         toast.error(result.error ?? "Failed to update auto-call");
         return;
       }
+      setShowAutoCallEnrollment(false);
       setAutoCallsEnabled(enabled);
       setRecoverySettings((current) =>
         current ? { ...current, autoCallsEnabled: enabled } : current,
@@ -704,11 +712,20 @@ export function AbandonedCheckoutsPanel() {
         enabled
           ? result.enrolled
             ? `Auto-call on. Queued ${result.enrolled} checkout${result.enrolled === 1 ? "" : "s"} for the next calling slot.`
-            : "Auto-call on. No pending checkouts with a phone number to queue."
+            : "Auto-call on. No matching checkouts with a phone number to queue."
           : "Auto-call off. Pending schedules were cancelled.",
       );
       void refreshOpenCheckouts({ silent: true });
     });
+  }
+
+  function handleAutoCallToggle(enabled: boolean) {
+    if (!selectedStoreDomain || isTogglingAutoCalls) return;
+    if (enabled) {
+      setShowAutoCallEnrollment(true);
+      return;
+    }
+    commitAutoCalls(false);
   }
 
   if (!selectedStoreDomain) return null;
@@ -814,6 +831,14 @@ export function AbandonedCheckoutsPanel() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        <AutoCallEnrollmentDialog
+          open={showAutoCallEnrollment}
+          pending={isTogglingAutoCalls}
+          onOpenChange={(open) => {
+            if (!isTogglingAutoCalls) setShowAutoCallEnrollment(open);
+          }}
+          onConfirm={(selection) => commitAutoCalls(true, selection)}
+        />
         <EditCheckoutScheduleDialog
           checkout={editingCheckout}
           open={editingCheckout !== null}

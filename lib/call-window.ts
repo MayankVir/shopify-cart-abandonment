@@ -131,6 +131,21 @@ function tzOffsetMs(date: Date, timeZone: string): number {
   return asUtc - date.getTime();
 }
 
+/** Wall-clock time in `timeZone`, as a UTC instant. */
+export function wallTimeInZoneToUtc(
+  parts: {
+    year: number;
+    month: number;
+    day: number;
+    hour: number;
+    minute: number;
+    second?: number;
+  },
+  timeZone: string
+): Date {
+  return zonedWallTimeToUtc(parts, timeZone);
+}
+
 function zonedWallTimeToUtc(
   parts: {
     year: number;

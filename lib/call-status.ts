@@ -213,6 +213,53 @@ export function canScheduleCallback(
   return canEditSchedule(status, phone) || status === CallStatus.COMPLETED;
 }
 
+export type AutoCallEnrollmentGroup = "pending" | "callFailed" | "busy";
+
+export type AutoCallEnrollmentSelection = Record<
+  AutoCallEnrollmentGroup,
+  boolean
+>;
+
+/** Pending only, so turning auto-call on does not re-queue failed or busy calls. */
+export const DEFAULT_AUTO_CALL_ENROLLMENT: AutoCallEnrollmentSelection = {
+  pending: true,
+  callFailed: false,
+  busy: false,
+};
+
+export const AUTO_CALL_ENROLLMENT_OPTIONS: ReadonlyArray<{
+  id: AutoCallEnrollmentGroup;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "pending",
+    label: "Pending",
+    description: "Checkouts that have not been called yet.",
+  },
+  {
+    id: "callFailed",
+    label: "Call failed",
+    description:
+      "Prep or dispatch failed — draft, cart, enrichment, or the call itself.",
+  },
+  {
+    id: "busy",
+    label: "Busy",
+    description: "The last attempt ended because the line was busy.",
+  },
+];
+
+export function callStatusesForEnrollment(
+  selection: AutoCallEnrollmentSelection
+): CallStatus[] {
+  const statuses: CallStatus[] = [];
+  if (selection.pending) statuses.push(CallStatus.PENDING);
+  if (selection.callFailed) statuses.push(...FAILURE_STATUSES);
+  if (selection.busy) statuses.push(CallStatus.BUSY);
+  return statuses;
+}
+
 export function shouldScheduleAutoCall(
   autoCallsEnabled: boolean,
   phone: string | null | undefined

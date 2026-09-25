@@ -11,7 +11,11 @@ import {
 import { normalizePhoneNumber } from "@/lib/phone";
 import { nextCallScheduledFlag } from "@/lib/call-status";
 import { resolveScheduledCallAt } from "@/lib/shopify-admin";
-import { callWindowFromStore } from "@/lib/call-window";
+import {
+  callWindowFromStore,
+  DEFAULT_IANA_TIMEZONE,
+  wallTimeInZoneToUtc,
+} from "@/lib/call-window";
 import { mergeIncomingUserContext } from "@/lib/user-context";
 import { supersedeRepeatCarts } from "@/lib/repeat-carts";
 import { parseSheetUrl, sheetGvizRangeUrl } from "@/lib/sheet-url";
@@ -309,11 +313,57 @@ function parseRupee(value: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseDate(value: string): Date | null {
+/**
+ * Sheet cells are a wall clock with no timezone (`9/25/2026 17:10:05`).
+ * `new Date` reads that in the server's zone, so a UTC host stores 17:10Z and
+ * the recovery table then shifts it +5:30 into IST. Interpret the clock in the
+ * store timezone instead.
+ */
+function parseDate(value: string, timeZone: string): Date | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  const d = new Date(trimmed);
-  return Number.isNaN(d.getTime()) ? null : d;
+
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    const absolute = new Date(trimmed);
+    return Number.isNaN(absolute.getTime()) ? null : absolute;
+  }
+
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(
+    trimmed
+  );
+  if (us) {
+    return wallTimeInZoneToUtc(
+      {
+        month: Number(us[1]),
+        day: Number(us[2]),
+        year: Number(us[3]),
+        hour: Number(us[4] ?? 0),
+        minute: Number(us[5] ?? 0),
+        second: Number(us[6] ?? 0),
+      },
+      timeZone
+    );
+  }
+
+  const iso = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(
+    trimmed
+  );
+  if (iso) {
+    return wallTimeInZoneToUtc(
+      {
+        year: Number(iso[1]),
+        month: Number(iso[2]),
+        day: Number(iso[3]),
+        hour: Number(iso[4] ?? 0),
+        minute: Number(iso[5] ?? 0),
+        second: Number(iso[6] ?? 0),
+      },
+      timeZone
+    );
+  }
+
+  const fallback = new Date(trimmed);
+  return Number.isNaN(fallback.getTime()) ? null : fallback;
 }
 
 function variantIdFromUrl(url: string | undefined): string {
@@ -544,7 +594,10 @@ export function parseLineItemsFromSheet(record: Record<string, string>): LineIte
   });
 }
 
-export function parseSheetRow(record: Record<string, string>): ParsedSheetRow | null {
+export function parseSheetRow(
+  record: Record<string, string>,
+  timeZone: string
+): ParsedSheetRow | null {
   const requestId = record.request_id?.trim();
   if (!requestId) return null;
 
@@ -572,10 +625,13 @@ export function parseSheetRow(record: Record<string, string>): ParsedSheetRow | 
     cartValue: parseRupee(record.total_price || record.items_subtotal_price || "0"),
     recoveryUrl: record.abc_url?.trim() || "",
     lineItems: parseLineItemsFromSheet(record),
-    shopifyCreatedAt: parseDate(record.created_at || ""),
+    shopifyCreatedAt: parseDate(record.created_at || "", timeZone),
     // Webhook time is when the cart was abandoned. updated_at is a few minutes
     // later and reshuffles the recovery table on every sync.
-    abandonedAt: parseDate(record.timestamp_incoming_webhook || record.created_at || ""),
+    abandonedAt: parseDate(
+      record.timestamp_incoming_webhook || record.created_at || "",
+      timeZone
+    ),
     isAbandoned: true,
     dropOffStage: record.drop_off_stage?.trim() || "",
     cartItemsSummary: record.cart_items?.trim() || "",
@@ -601,7 +657,7 @@ export async function tryFetchCsv(url: string): Promise<{ ok: boolean; text: str
 
 export function parseSheetCsv(
   text: string,
-  options?: { dataOnly?: boolean }
+  options?: { dataOnly?: boolean; timeZone?: string }
 ): ParsedSheetRow[] {
   const rows = parseCsv(text);
   const expected = SHEET_HEADERS as readonly string[];
@@ -630,10 +686,11 @@ export function parseSheetCsv(
     }
   }
 
+  const timeZone = options?.timeZone?.trim() || DEFAULT_IANA_TIMEZONE;
   const parsed: ParsedSheetRow[] = [];
   for (let i = dataStartIndex; i < rows.length; i++) {
     const record = rowToRecord([...expected], rows[i]);
-    const row = parseSheetRow(record);
+    const row = parseSheetRow(record, timeZone);
     if (row) parsed.push(row);
   }
 
@@ -692,7 +749,10 @@ export async function syncAbandonedCheckoutsFromSheet(
     { direction: syncDirection, totalDataRows }
   );
   const rawRowCount = countSheetDataRows(csv, includesHeader);
-  const rows = parseSheetCsv(csv, { dataOnly: !includesHeader });
+  const rows = parseSheetCsv(csv, {
+    dataOnly: !includesHeader,
+    timeZone: callWindowFromStore(store).timeZone,
+  });
 
   const totalPages = Math.ceil(Math.max(totalDataRows, 1) / pageSize);
   const hasMore = page + 1 < totalPages && rawRowCount > 0;

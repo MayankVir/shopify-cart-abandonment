@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
   CalendarClock,
@@ -32,6 +32,8 @@ import {
   splitRetryDelay,
   type RetryDelayUnit,
 } from "@/lib/busy-retry";
+import { AutoCallEnrollmentDialog } from "@/components/dashboard/auto-call-enrollment-dialog";
+import type { AutoCallEnrollmentSelection } from "@/lib/call-status";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -186,6 +188,8 @@ export function RecoverySettings({
   const [activeSection, setActiveSection] =
     useState<SettingsSectionId>("source");
   const [isPending, startSave] = useTransition();
+  const [enrollmentOpen, setEnrollmentOpen] = useState(false);
+  const enrollmentConfirmed = useRef(false);
   const ttaiConfigured = Boolean(
     settings?.ttaiScenarioId && settings?.ttaiTrunkId
   );
@@ -236,6 +240,17 @@ export function RecoverySettings({
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
+    const turningOn = Boolean(
+      settings && !settings.autoCallsEnabled && autoCallsEnabled,
+    );
+    if (turningOn) {
+      setEnrollmentOpen(true);
+      return;
+    }
+    persistSettings();
+  }
+
+  function persistSettings(enrollment?: AutoCallEnrollmentSelection) {
     startSave(async () => {
       const recovery = await updateStoreRecoverySettings(
         storeDomain,
@@ -254,7 +269,8 @@ export function RecoverySettings({
           ),
           ianaTimezoneOverride:
             timezoneOverride === "shopify" ? "" : timezoneOverride,
-        }
+        },
+        enrollment,
       );
       if (!recovery.success) {
         toast.error(recovery.error ?? "Failed to save recovery settings");
@@ -353,6 +369,7 @@ export function RecoverySettings({
     SETTINGS_SECTIONS[0];
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] gap-0 overflow-hidden p-0 sm:max-w-3xl">
         <DialogHeader className="border-b border-border px-5 py-3 pr-12">
@@ -763,6 +780,29 @@ export function RecoverySettings({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <AutoCallEnrollmentDialog
+      open={enrollmentOpen}
+      pending={isPending}
+      onOpenChange={(next) => {
+        if (isPending) return;
+        setEnrollmentOpen(next);
+        if (
+          !next &&
+          !enrollmentConfirmed.current &&
+          settings &&
+          !settings.autoCallsEnabled
+        ) {
+          setAutoCallsEnabled(false);
+        }
+        if (!next) enrollmentConfirmed.current = false;
+      }}
+      onConfirm={(selection) => {
+        enrollmentConfirmed.current = true;
+        setEnrollmentOpen(false);
+        persistSettings(selection);
+      }}
+    />
+    </>
   );
 }
 
