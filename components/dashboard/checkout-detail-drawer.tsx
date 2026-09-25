@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { AlertCircle, Loader2, Pencil, Phone, PhoneOff } from "lucide-react";
+import { AlertCircle, ChevronRight, Loader2, Pencil, Phone, PhoneOff } from "lucide-react";
 import {
   getCallAttemptsForCheckout,
   getPipelineEventsForCheckout,
@@ -31,6 +31,11 @@ import { sanitizeRecoveryError } from "@/lib/recovery-error";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -59,15 +64,7 @@ function DetailField({
   );
 }
 
-function PipelineWaterfall({ events }: { events: PipelineEventRow[] }) {
-  if (events.length === 0) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        No pipeline events yet. Events appear when a call is queued or dispatched.
-      </p>
-    );
-  }
-
+function PipelineEventList({ events }: { events: PipelineEventRow[] }) {
   const totalMs = events.reduce((sum, event) => sum + (event.durationMs ?? 0), 0);
 
   return (
@@ -98,6 +95,120 @@ function PipelineWaterfall({ events }: { events: PipelineEventRow[] }) {
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+function tryTitle(retryNumber: number | null, index: number): string {
+  if (retryNumber != null && retryNumber > 0) return `Retry ${retryNumber}`;
+  if (index === 0) return "First call";
+  return `Retry ${index}`;
+}
+
+function groupDispatchTries(
+  events: PipelineEventRow[],
+  attempts: CallAttemptRow[],
+): Array<{
+  key: string;
+  title: string;
+  when: string;
+  events: PipelineEventRow[];
+}> {
+  const attemptsById = new Map(attempts.map((attempt) => [attempt.id, attempt]));
+  const buckets = new Map<string, PipelineEventRow[]>();
+
+  for (const event of events) {
+    if (!event.callAttemptId) continue;
+    const list = buckets.get(event.callAttemptId) ?? [];
+    list.push(event);
+    buckets.set(event.callAttemptId, list);
+  }
+
+  const orderedIds = Array.from(buckets.keys()).sort((a, b) => {
+    const aTime =
+      attemptsById.get(a)?.startedAt ?? buckets.get(a)?.[0]?.startedAt ?? "";
+    const bTime =
+      attemptsById.get(b)?.startedAt ?? buckets.get(b)?.[0]?.startedAt ?? "";
+    return aTime.localeCompare(bTime);
+  });
+
+  for (const event of events) {
+    if (event.callAttemptId) continue;
+    const owner =
+      orderedIds.find((id) => {
+        const started =
+          attemptsById.get(id)?.startedAt ?? buckets.get(id)?.[0]?.startedAt ?? "";
+        return started >= event.startedAt;
+      }) ?? orderedIds[orderedIds.length - 1];
+    if (!owner) continue;
+    buckets.get(owner)?.push(event);
+  }
+
+  if (orderedIds.length === 0) {
+    return [
+      {
+        key: "dispatch",
+        title: "Dispatch",
+        when: events[0] ? formatDateTimeLabel(events[0].startedAt) : "",
+        events,
+      },
+    ];
+  }
+
+  return orderedIds.map((id, index) => {
+    const attempt = attemptsById.get(id);
+    const groupEvents = (buckets.get(id) ?? []).sort((a, b) =>
+      a.startedAt.localeCompare(b.startedAt),
+    );
+    const when = attempt?.startedAt ?? groupEvents[0]?.startedAt;
+    return {
+      key: id,
+      title: tryTitle(attempt?.retryNumber ?? null, index),
+      when: when ? formatDateTimeLabel(when) : "",
+      events: groupEvents,
+    };
+  });
+}
+
+function PipelineWaterfall({
+  events,
+  attempts,
+}: {
+  events: PipelineEventRow[];
+  attempts: CallAttemptRow[];
+}) {
+  if (events.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        No pipeline events yet. Events appear when a call is queued or dispatched.
+      </p>
+    );
+  }
+
+  const groups = groupDispatchTries(events, attempts).filter(
+    (group) => group.events.length > 0,
+  );
+
+  if (groups.length <= 1) {
+    return <PipelineEventList events={groups[0]?.events ?? events} />;
+  }
+
+  return (
+    <div className="space-y-2">
+      {groups.map((group, index) => (
+        <Collapsible key={group.key} defaultOpen={index === groups.length - 1}>
+          <CollapsibleTrigger className="group flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-left hover:bg-muted/50">
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
+            <span className="text-sm font-medium">{group.title}</span>
+            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+              {group.when}
+            </span>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="px-3 pb-2 pt-2">
+            <PipelineEventList events={group.events} />
+          </CollapsibleContent>
+        </Collapsible>
+      ))}
     </div>
   );
 }
@@ -454,7 +565,7 @@ export function CheckoutDetailDrawer({
 
             <section className="space-y-3 border-t border-border pt-6">
               <h3 className="text-sm font-semibold">Dispatch timeline</h3>
-              <PipelineWaterfall events={pipelineEvents} />
+              <PipelineWaterfall events={pipelineEvents} attempts={attempts} />
             </section>
 
             <section className="space-y-2 border-t border-border pt-6">

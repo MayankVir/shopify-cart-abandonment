@@ -7,6 +7,7 @@ export interface SipDynamicVars {
   order_id: string;
   phone_number: string;
   customer_phone?: string;
+  customer_name?: string;
   abandoned_ts?: string;
   cart_value?: string;
   order_context?: string;
@@ -510,6 +511,7 @@ export function buildSessionSummary(session: TtaiSessionDetails): string | undef
 export function buildSipDynamicVars(input: {
   orderId: string;
   phone: string;
+  customerName?: string;
   abandonedTs?: string;
   cartValue?: number;
   orderContext?: string;
@@ -537,6 +539,8 @@ export function buildSipDynamicVars(input: {
     phone_number: input.phone,
     customer_phone: input.phone,
   };
+  const customerName = input.customerName?.trim();
+  if (customerName) vars.customer_name = customerName;
   if (input.abandonedTs) vars.abandoned_ts = input.abandonedTs;
   if (input.cartValue != null) vars.cart_value = String(input.cartValue);
   if (input.orderContext) vars.order_context = input.orderContext;

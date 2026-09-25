@@ -25,6 +25,7 @@ import {
   parseShippingAddressFromUserContext,
   type ShippingAddressFields,
 } from "@/lib/shipping-address";
+import { parseCustomerNameFromUserContext } from "@/lib/user-context";
 import {
   type PipelineEventContext,
   recordPipelineEvent,
@@ -275,7 +276,6 @@ export async function runRecoveryCallPipeline(
       const draft = await createDraftOrderForStore(checkout.store, {
         lineItems,
         phone,
-        email: checkout.customerEmail ?? undefined,
         checkoutToken: checkout.checkoutToken,
         shippingAddress: sheetCtx.shippingAddress,
         customerName: sheetCtx.customerName,
@@ -388,7 +388,6 @@ export async function runRecoveryCallPipeline(
           {
             lineItems,
             phone,
-            email: checkout.customerEmail ?? undefined,
           }
         );
 
@@ -511,6 +510,8 @@ export async function runRecoveryCallPipeline(
   const dynamicVars = buildSipDynamicVars({
     orderId: checkout.checkoutToken,
     phone,
+    customerName:
+      parseCustomerNameFromUserContext(userContext) || sheetCtx.customerName,
     abandonedTs: checkout.shopifyCreatedAt?.toISOString() ?? "",
     cartValue: checkout.cartValue,
     orderContext,

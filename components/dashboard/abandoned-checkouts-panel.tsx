@@ -180,8 +180,17 @@ function CheckoutRow({
     });
   }
 
+  const live = isCalling || isActiveCall(checkout.callStatus);
+
   return (
-    <TableRow data-state={selected ? "selected" : undefined}>
+    <TableRow
+      data-state={selected ? "selected" : undefined}
+      className={
+        live
+          ? "bg-sky-500/10 shadow-[inset_3px_0_0_0] shadow-sky-400 hover:bg-sky-500/15 data-[state=selected]:bg-sky-500/15"
+          : undefined
+      }
+    >
       <TableCell className="px-3 py-2">
         <Checkbox
           checked={selected}
@@ -262,6 +271,12 @@ export function AbandonedCheckoutsPanel() {
   const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
   const callLogs = useAnalyticsStore((s) => s.callLogs);
   const [checkouts, setCheckouts] = useState<AbandonedCheckoutRow[]>([]);
+  const [completedCheckouts, setCompletedCheckouts] = useState<
+    AbandonedCheckoutRow[]
+  >([]);
+  const [shownCompletedDates, setShownCompletedDates] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [isSyncing, startSync] = useTransition();
   const [showSettings, setShowSettings] = useState(false);
@@ -293,6 +308,16 @@ export function AbandonedCheckoutsPanel() {
   const [isDetailCalling, startDetailCall] = useTransition();
   const [isDetailStopping, startDetailStop] = useTransition();
 
+  const displayedCheckouts = [
+    ...checkouts,
+    ...completedCheckouts.filter((checkout) =>
+      shownCompletedDates.has(abandonmentDateLabel(checkout.shopifyCreatedAt)),
+    ),
+  ].sort((a, b) => {
+    const aTime = a.shopifyCreatedAt ? new Date(a.shopifyCreatedAt).getTime() : 0;
+    const bTime = b.shopifyCreatedAt ? new Date(b.shopifyCreatedAt).getTime() : 0;
+    return bTime - aTime;
+  });
   const selectableCheckouts = checkouts.filter((checkout) =>
     canSelectCheckout(
       checkout.callStatus,
@@ -338,6 +363,7 @@ export function AbandonedCheckoutsPanel() {
         if (!result.success) return;
 
         setCheckouts(result.checkouts);
+        setCompletedCheckouts(result.completedCheckouts ?? []);
         setTotalCount(result.totalCount);
         setHasLoadedCheckouts(true);
       } finally {
@@ -355,6 +381,8 @@ export function AbandonedCheckoutsPanel() {
     setShopifyPageInfo(null);
     setSheetPageInfo(null);
     setCheckouts([]);
+    setCompletedCheckouts([]);
+    setShownCompletedDates(new Set());
     setIsLoadingCheckouts(true);
     setHasLoadedCheckouts(false);
     setDetailCheckout(null);
@@ -374,6 +402,15 @@ export function AbandonedCheckoutsPanel() {
       const next = new Set(current);
       if (selected) next.add(checkoutId);
       else next.delete(checkoutId);
+      return next;
+    });
+  }
+
+  function toggleCompletedDate(dateLabel: string) {
+    setShownCompletedDates((current) => {
+      const next = new Set(current);
+      if (next.has(dateLabel)) next.delete(dateLabel);
+      else next.add(dateLabel);
       return next;
     });
   }
@@ -426,6 +463,7 @@ export function AbandonedCheckoutsPanel() {
           return;
         }
         setCheckouts(result.checkouts);
+        setCompletedCheckouts(result.completedCheckouts ?? []);
         setTotalCount(result.totalCount ?? result.checkouts.length);
         setShopifyPageInfo(result.shopifyPageInfo ?? null);
         setSheetPageInfo(result.sheetPageInfo ?? null);
@@ -914,9 +952,9 @@ export function AbandonedCheckoutsPanel() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {checkouts.map((checkout, index) => {
+                  {displayedCheckouts.map((checkout, index) => {
                     const dateLabel = abandonmentDateLabel(checkout.shopifyCreatedAt);
-                    const previous = index > 0 ? checkouts[index - 1] : null;
+                    const previous = index > 0 ? displayedCheckouts[index - 1] : null;
                     const previousLabel = previous
                       ? abandonmentDateLabel(previous.shopifyCreatedAt)
                       : null;
@@ -939,8 +977,8 @@ export function AbandonedCheckoutsPanel() {
                     return (
                       <Fragment key={checkout.id}>
                         {dateLabel !== previousLabel ? (
-                          <TableRow className="hover:bg-transparent">
-                            <TableCell className="border-y border-border bg-muted/40 px-3 py-1.5">
+                          <TableRow className="border-0 hover:bg-transparent">
+                            <TableCell className="border-0 bg-foreground/10 px-3 py-2.5">
                               <Checkbox
                                 checked={
                                   selectedOnDate > 0 && !allOnDateSelected
@@ -956,11 +994,35 @@ export function AbandonedCheckoutsPanel() {
                             </TableCell>
                             <TableCell
                               colSpan={6}
-                              className="border-y border-border bg-muted/40 px-3 py-1.5"
+                              className="border-0 bg-foreground/10 px-3 py-2.5"
                             >
-                              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                                {dateLabel}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-3">
+                                <span className="text-sm font-semibold uppercase tracking-wide text-foreground">
+                                  {dateLabel}
+                                </span>
+                                {completedCheckouts.some(
+                                  (row) =>
+                                    abandonmentDateLabel(row.shopifyCreatedAt) ===
+                                    dateLabel,
+                                ) ? (
+                                  <button
+                                    type="button"
+                                    className="text-xs font-medium text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+                                    onClick={() => toggleCompletedDate(dateLabel)}
+                                  >
+                                    {shownCompletedDates.has(dateLabel)
+                                      ? "Hide completed"
+                                      : `Show completed (${
+                                          completedCheckouts.filter(
+                                            (row) =>
+                                              abandonmentDateLabel(
+                                                row.shopifyCreatedAt,
+                                              ) === dateLabel,
+                                          ).length
+                                        })`}
+                                  </button>
+                                ) : null}
+                              </div>
                             </TableCell>
                           </TableRow>
                         ) : null}

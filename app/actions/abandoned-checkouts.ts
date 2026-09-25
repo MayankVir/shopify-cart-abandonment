@@ -104,6 +104,7 @@ export interface CallAttemptRow {
   transcript: string | null;
   toolCallsJson: unknown;
   trigger: string;
+  retryNumber: number;
   startedAt: string;
   endedAt: string | null;
   durationSec: number | null;
@@ -139,6 +140,7 @@ export interface AbandonedCheckoutRow {
 export interface SyncResult {
   success: boolean;
   checkouts: AbandonedCheckoutRow[];
+  completedCheckouts?: AbandonedCheckoutRow[];
   syncedAt: string;
   syncMode?: "graphql" | "rest" | "webhook-only" | "sheet";
   warning?: string;
@@ -163,6 +165,7 @@ export interface SheetPageInfo {
 export interface CheckoutListResult {
   success: boolean;
   checkouts: AbandonedCheckoutRow[];
+  completedCheckouts?: AbandonedCheckoutRow[];
   totalCount: number;
   error?: string;
 }
@@ -185,6 +188,7 @@ function toAttemptRow(
     transcript: a.transcript,
     toolCallsJson: a.toolCallsJson,
     trigger: a.trigger,
+    retryNumber: a.retryNumber,
     startedAt: a.startedAt.toISOString(),
     endedAt: a.endedAt?.toISOString() ?? null,
     durationSec: a.durationSec,
@@ -258,6 +262,22 @@ async function fetchOpenCheckouts(storeDomain: string) {
   };
 }
 
+async function fetchCompletedCheckouts(storeDomain: string) {
+  const checkouts = await db.abandonedCheckout.findMany({
+    where: { storeDomain, callStatus: CallStatus.COMPLETED },
+    orderBy: [
+      { shopifyCreatedAt: { sort: "desc", nulls: "last" } },
+      { createdAt: "desc" },
+    ],
+    take: 200,
+    include: {
+      callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
+    },
+  });
+
+  return checkouts.map(toRow);
+}
+
 export async function getAbandonedCheckoutsForStore(
   storeDomain: string
 ): Promise<CheckoutListResult> {
@@ -291,8 +311,11 @@ export async function getAbandonedCheckoutsForStore(
     };
   }
 
-  const result = await fetchOpenCheckouts(storeDomain);
-  return { success: true, ...result };
+  const [result, completedCheckouts] = await Promise.all([
+    fetchOpenCheckouts(storeDomain),
+    fetchCompletedCheckouts(storeDomain),
+  ]);
+  return { success: true, ...result, completedCheckouts };
 }
 
 async function applyAutoCallEnrollment(
@@ -326,7 +349,10 @@ export async function syncAbandonedCheckoutsForStore(
       const sheetResult = await syncAbandonedCheckoutsFromSheet(store, {
         page: sheetPage,
       });
-      const listResult = await fetchOpenCheckouts(storeDomain);
+      const [listResult, completedCheckouts] = await Promise.all([
+        fetchOpenCheckouts(storeDomain),
+        fetchCompletedCheckouts(storeDomain),
+      ]);
 
       console.info(
         "[sheet] abandoned checkouts synced",
@@ -342,6 +368,7 @@ export async function syncAbandonedCheckoutsForStore(
       return {
         success: true,
         checkouts: listResult.checkouts,
+        completedCheckouts,
         syncedAt: new Date().toISOString(),
         syncMode: "sheet",
         warning:
@@ -496,12 +523,16 @@ export async function syncAbandonedCheckoutsForStore(
       }
     }
 
-    const listResult = await fetchOpenCheckouts(storeDomain);
+    const [listResult, completedCheckouts] = await Promise.all([
+      fetchOpenCheckouts(storeDomain),
+      fetchCompletedCheckouts(storeDomain),
+    ]);
     const tokenCache = getCachedAdminTokenInfo(storeDomain);
 
     return {
       success: true,
       checkouts: listResult.checkouts,
+      completedCheckouts,
       syncedAt: new Date().toISOString(),
       syncMode,
       warning,
