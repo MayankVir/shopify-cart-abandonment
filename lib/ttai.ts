@@ -7,8 +7,6 @@ export interface SipDynamicVars {
   order_id: string;
   phone_number: string;
   customer_phone?: string;
-  customer_name?: string;
-  name?: string;
   abandoned_ts?: string;
   cart_value?: string;
   order_context?: string;
@@ -43,6 +41,8 @@ export interface DispatchSipCallParams {
   phone: string;
   scenarioId: string;
   sipTrunkId: string;
+  /** Top-level Tough Tongue field, not a dynamic var. */
+  userName?: string;
   dynamicVars: Record<string, string | undefined>;
 }
 
@@ -236,6 +236,7 @@ export async function dispatchSipCall(
       phone,
       scenario: params.scenarioId,
       trunk: params.sipTrunkId,
+      userName: params.userName,
       vars: Object.keys(params.dynamicVars),
     });
     return {
@@ -246,10 +247,12 @@ export async function dispatchSipCall(
   }
 
   const cfg = getTTApiConfig();
+  const userName = params.userName?.trim();
   const payload = {
     scenario_id: params.scenarioId,
     phone_number: phone,
     sip_trunk_id: params.sipTrunkId,
+    ...(userName ? { user_name: userName } : {}),
     dynamic_vars: params.dynamicVars,
   };
 
@@ -512,7 +515,6 @@ export function buildSessionSummary(session: TtaiSessionDetails): string | undef
 export function buildSipDynamicVars(input: {
   orderId: string;
   phone: string;
-  customerName?: string;
   abandonedTs?: string;
   cartValue?: number;
   orderContext?: string;
@@ -540,11 +542,6 @@ export function buildSipDynamicVars(input: {
     phone_number: input.phone,
     customer_phone: input.phone,
   };
-  const customerName = input.customerName?.trim();
-  if (customerName) {
-    vars.customer_name = customerName;
-    vars.name = customerName;
-  }
   if (input.abandonedTs) vars.abandoned_ts = input.abandonedTs;
   if (input.cartValue != null) vars.cart_value = String(input.cartValue);
   if (input.orderContext) vars.order_context = input.orderContext;

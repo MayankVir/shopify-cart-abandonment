@@ -507,11 +507,11 @@ export async function runRecoveryCallPipeline(
     await repeatStep.skip("Repeat-customer check disabled");
   }
 
+  const customerName =
+    parseCustomerNameFromUserContext(userContext) || sheetCtx.customerName;
   const dynamicVars = buildSipDynamicVars({
     orderId: checkout.checkoutToken,
     phone,
-    customerName:
-      parseCustomerNameFromUserContext(userContext) || sheetCtx.customerName,
     abandonedTs: checkout.shopifyCreatedAt?.toISOString() ?? "",
     cartValue: checkout.cartValue,
     orderContext,
@@ -538,6 +538,7 @@ export async function runRecoveryCallPipeline(
     phone,
     scenarioId,
     sipTrunkId,
+    userName: customerName,
     dynamicVars,
   });
 
