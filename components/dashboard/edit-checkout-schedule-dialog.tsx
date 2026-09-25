@@ -19,6 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatPhoneNumber } from "@/lib/utils";
+import { CallStatus } from "@prisma/client";
 
 function toDatetimeLocalValue(iso: string | null): string {
   const source = iso ? new Date(iso) : new Date(Date.now() + 15 * 60 * 1000);
@@ -41,15 +42,21 @@ export function EditCheckoutScheduleDialog({
   checkout: AbandonedCheckoutRow | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
+  onSaved: (scheduledCallAt?: string) => void;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startSave] = useTransition();
 
+  const isCallback = checkout?.callStatus === CallStatus.COMPLETED;
+
   useEffect(() => {
     if (!open || !checkout) return;
-    setValue(toDatetimeLocalValue(checkout.scheduledCallAt));
+    const seed =
+      checkout.callStatus === CallStatus.COMPLETED
+        ? null
+        : checkout.scheduledCallAt;
+    setValue(toDatetimeLocalValue(seed));
     setError(null);
   }, [open, checkout]);
 
@@ -79,9 +86,9 @@ export function EditCheckoutScheduleDialog({
         return;
       }
 
-      toast.success("Schedule updated");
+      toast.success(isCallback ? "Callback scheduled" : "Schedule updated");
       onOpenChange(false);
-      onSaved();
+      onSaved(result.scheduledCallAt);
     });
   }
 
@@ -96,12 +103,20 @@ export function EditCheckoutScheduleDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {checkout?.callScheduled ? "Edit schedule" : "Set schedule"}
+            {isCallback
+              ? "Schedule callback"
+              : checkout?.callScheduled
+                ? "Edit schedule"
+                : "Set schedule"}
           </DialogTitle>
           <DialogDescription>
-            {customerLabel
-              ? `Choose when to call ${customerLabel}. Times in the past become due immediately if auto-call is on.`
-              : "Choose when this recovery call should run."}
+            {isCallback
+              ? customerLabel
+                ? `This call with ${customerLabel} already finished. Pick a time to call again. The checkout goes back to scheduled and is dialed then.`
+                : "This call already finished. Pick a time to call again. The checkout goes back to scheduled and is dialed then."
+              : customerLabel
+                ? `Choose when to call ${customerLabel}. Times in the past become due immediately if auto-call is on.`
+                : "Choose when this recovery call should run."}
           </DialogDescription>
         </DialogHeader>
         <form id="edit-checkout-schedule-form" onSubmit={handleSubmit} className="space-y-3">
@@ -149,6 +164,8 @@ export function EditCheckoutScheduleDialog({
                 <Loader2 className="mr-1 h-3 w-3 animate-spin" />
                 Saving
               </>
+            ) : isCallback ? (
+              "Schedule callback"
             ) : (
               "Save schedule"
             )}

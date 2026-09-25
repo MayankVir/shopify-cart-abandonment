@@ -2,7 +2,15 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { AlertCircle, ChevronRight, Loader2, Pencil, Phone, PhoneOff } from "lucide-react";
+import {
+  AlertCircle,
+  CalendarClock,
+  ChevronRight,
+  Loader2,
+  Pencil,
+  Phone,
+  PhoneOff,
+} from "lucide-react";
 import {
   getCallAttemptsForCheckout,
   getPipelineEventsForCheckout,
@@ -30,6 +38,7 @@ import {
 import { sanitizeRecoveryError } from "@/lib/recovery-error";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { Badge } from "@/components/ui/badge";
+import { CallStatus } from "@prisma/client";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -529,8 +538,16 @@ export function CheckoutDetailDrawer({
               <div className="flex flex-wrap gap-2">
                 {canEditScheduleTime ? (
                   <Button size="sm" variant="outline" onClick={onEditSchedule}>
-                    <Pencil className="h-3.5 w-3.5" />
-                    {checkout.callScheduled ? "Edit time" : "Set time"}
+                    {checkout.callStatus === CallStatus.COMPLETED ? (
+                      <CalendarClock className="h-3.5 w-3.5" />
+                    ) : (
+                      <Pencil className="h-3.5 w-3.5" />
+                    )}
+                    {checkout.callStatus === CallStatus.COMPLETED
+                      ? "Schedule callback"
+                      : checkout.callScheduled
+                        ? "Edit time"
+                        : "Set time"}
                   </Button>
                 ) : null}
                 {canRemoveSchedule ? (

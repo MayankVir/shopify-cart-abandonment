@@ -1,6 +1,10 @@
 "use server";
 
 import {
+  writeExtractionFeedbackForSheet,
+  type ExtractionFeedbackRowResult,
+} from "@/lib/call-feedback-sheet";
+import {
   generateDraftsForSheet,
   inspectDraftSheet,
   type DraftSheetInspection,
@@ -84,6 +88,43 @@ export async function generateDraftSheetBatchAction(input: {
         : error instanceof Error
           ? error.message
           : "Draft generation failed";
+    return { success: false, error: message };
+  }
+}
+
+export async function writeExtractionFeedbackBatchAction(input: {
+  storeDomain: string;
+  sheetUrl: string;
+  offset: number;
+  limit?: number;
+  onlySheetRows?: number[];
+}): Promise<{
+  success: boolean;
+  error?: string;
+  results?: ExtractionFeedbackRowResult[];
+  nextOffset?: number;
+  done?: boolean;
+  total?: number;
+}> {
+  await requireAdmin();
+
+  try {
+    await assertStoreAccess(input.storeDomain);
+    const batch = await writeExtractionFeedbackForSheet({
+      storeDomain: input.storeDomain,
+      sheetUrl: input.sheetUrl,
+      offset: input.offset,
+      limit: input.limit ?? 1,
+      onlySheetRows: input.onlySheetRows,
+    });
+    return { success: true, ...batch };
+  } catch (error) {
+    const message =
+      error instanceof StoreAccessError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : "Call feedback write failed";
     return { success: false, error: message };
   }
 }

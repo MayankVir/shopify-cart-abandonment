@@ -199,10 +199,18 @@ export function canEditSchedule(
   status: CallStatus,
   phone: string | null | undefined
 ): boolean {
-  return (
-    (status === CallStatus.PENDING || status === CallStatus.BUSY) &&
-    Boolean(phone?.trim())
-  );
+  if (!phone?.trim()) return false;
+  if (isActiveCall(status) || status === CallStatus.COMPLETED) return false;
+  return true;
+}
+
+/** Drawer callback: a finished call can be queued again at a chosen time. */
+export function canScheduleCallback(
+  status: CallStatus,
+  phone: string | null | undefined
+): boolean {
+  if (!phone?.trim() || isActiveCall(status)) return false;
+  return canEditSchedule(status, phone) || status === CallStatus.COMPLETED;
 }
 
 export function shouldScheduleAutoCall(

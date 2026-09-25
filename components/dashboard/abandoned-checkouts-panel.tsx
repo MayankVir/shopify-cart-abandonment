@@ -27,6 +27,7 @@ import { formatTimeUntilCall } from "@/lib/shopify-admin";
 import {
   canEditSchedule,
   canInitiateCall,
+  canScheduleCallback,
   canSelectCheckout,
   canStopCall,
   displayCheckoutStatus,
@@ -133,6 +134,7 @@ function CheckoutRow({
   autoCallsEnabled,
   onSelectedChange,
   onOpenDetails,
+  onSchedule,
   onRefresh,
 }: {
   checkout: AbandonedCheckoutRow;
@@ -141,6 +143,7 @@ function CheckoutRow({
   autoCallsEnabled: boolean;
   onSelectedChange: (selected: boolean) => void;
   onOpenDetails: () => void;
+  onSchedule: () => void;
   onRefresh: () => void;
 }) {
   const [isCalling, startCall] = useTransition();
@@ -158,6 +161,9 @@ function CheckoutRow({
     !autoCallsEnabled &&
     canInitiateCall(checkout.callStatus) &&
     Boolean(checkout.customerPhone);
+  const showRowSchedule =
+    !checkout.callScheduled &&
+    canEditSchedule(checkout.callStatus, checkout.customerPhone);
 
   function handleCallNow() {
     startCall(async () => {
@@ -237,6 +243,17 @@ function CheckoutRow({
       </TableCell>
       <TableCell className="px-3 py-2 text-right">
         <div className="flex items-center justify-end gap-1">
+          {showRowSchedule ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8"
+              onClick={onSchedule}
+            >
+              <CalendarClock className="h-3.5 w-3.5" />
+              Schedule
+            </Button>
+          ) : null}
           {showRowCall ? (
             <Button
               size="sm"
@@ -803,7 +820,18 @@ export function AbandonedCheckoutsPanel() {
           onOpenChange={(open) => {
             if (!open) setEditingCheckout(null);
           }}
-          onSaved={() => {
+          onSaved={(scheduledCallAt) => {
+            setDetailCheckout((current) => {
+              if (!current || current.id !== editingCheckout?.id) return current;
+              const wasCompleted = current.callStatus === CallStatus.COMPLETED;
+              return {
+                ...current,
+                callStatus: CallStatus.PENDING,
+                callScheduled: true,
+                scheduledCallAt: scheduledCallAt ?? current.scheduledCallAt,
+                lastError: wasCompleted ? null : current.lastError,
+              };
+            });
             setSelectedIds(new Set());
             void refreshOpenCheckouts({ silent: true });
           }}
@@ -824,7 +852,7 @@ export function AbandonedCheckoutsPanel() {
           onCallNow={handleDetailCall}
           canEditScheduleTime={
             detailCheckout
-              ? canEditSchedule(
+              ? canScheduleCallback(
                   detailCheckout.callStatus,
                   detailCheckout.customerPhone,
                 )
@@ -1039,6 +1067,7 @@ export function AbandonedCheckoutsPanel() {
                             toggleCheckoutSelection(checkout.id, selected)
                           }
                           onOpenDetails={() => setDetailCheckout(checkout)}
+                          onSchedule={() => setEditingCheckout(checkout)}
                           onRefresh={() => {
                             void refreshOpenCheckouts({ silent: true });
                           }}

@@ -3,7 +3,12 @@
 import { auth } from "@clerk/nextjs/server";
 import { CallStatus, CheckoutSyncMode, Prisma, SheetSyncDirection } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { canEditSchedule, canStopCall, nextCallScheduledFlag } from "@/lib/call-status";
+import {
+  canEditSchedule,
+  canScheduleCallback,
+  canStopCall,
+  nextCallScheduledFlag,
+} from "@/lib/call-status";
 import {
   type CheckoutSyncModeValue,
   isCheckoutSyncMode,
@@ -681,11 +686,11 @@ export async function updateCheckoutScheduleAction(
     return { success: false, error: accessError };
   }
 
-  if (!canEditSchedule(checkout.callStatus, checkout.customerPhone)) {
+  if (!canScheduleCallback(checkout.callStatus, checkout.customerPhone)) {
     return {
       success: false,
-      error: checkout.callStatus !== CallStatus.PENDING && checkout.callStatus !== CallStatus.BUSY
-        ? "Only pending or busy checkouts can have their schedule changed"
+      error: checkout.customerPhone?.trim()
+        ? "This checkout cannot be scheduled while a call is in progress"
         : "A phone number is required to schedule a call",
     };
   }
@@ -712,6 +717,8 @@ export async function updateCheckoutScheduleAction(
     };
   }
 
+  const isCallback = checkout.callStatus === CallStatus.COMPLETED;
+
   await db.abandonedCheckout.update({
     where: { id: checkout.id },
     data: {
@@ -719,6 +726,7 @@ export async function updateCheckoutScheduleAction(
       callScheduled: true,
       callStatus: CallStatus.PENDING,
       autoCallExcluded: false,
+      ...(isCallback ? { lastError: null, retryReason: null } : {}),
     },
   });
 
@@ -798,7 +806,7 @@ export async function bulkScheduleCheckoutsAction(
     scheduledCallAt: scheduledCallAt.toISOString(),
     error:
       eligibleIds.length === 0
-        ? "Only pending or busy checkouts with a phone number can be scheduled"
+        ? "Only checkouts with a phone number that are not already on a call can be scheduled"
         : undefined,
   };
 }

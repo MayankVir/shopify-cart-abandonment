@@ -120,6 +120,8 @@ export interface TtaiSessionDetails {
   transcript_url?: string;
   evaluation_results?: TtaiEvaluationResults | null;
   improvement_results?: TtaiImprovementResults | null;
+  /** Script extraction filled after the call. Null when no transcript was analysed. */
+  extraction_results?: Record<string, unknown> | null;
   user_metadata?: Record<string, unknown>;
 }
 
@@ -477,6 +479,38 @@ export function scenarioTotalMinutes(scenario: TtaiScenarioAnalytics): number {
     Math.round(scenario.total_sessions * scenario.avg_duration_minutes * 10) /
     10
   );
+}
+
+const EXTRACTION_FEEDBACK_FIELDS = [
+  "cart_recovery_score",
+  "call_outcome",
+  "items_ordered",
+  "order_total",
+  "abandonment_reason",
+  "customer_address",
+  "follow_up_action",
+] as const;
+
+function extractionValue(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+/** All extraction fields, one per line, for the ttai_call_feedback cell. */
+export function formatExtractionFeedback(extraction: unknown): string | null {
+  if (!extraction || typeof extraction !== "object" || Array.isArray(extraction)) {
+    return null;
+  }
+  const record = extraction as Record<string, unknown>;
+  const extras = Object.keys(record).filter(
+    (key) => !EXTRACTION_FEEDBACK_FIELDS.includes(key as (typeof EXTRACTION_FEEDBACK_FIELDS)[number]),
+  );
+  const fields = [...EXTRACTION_FEEDBACK_FIELDS, ...extras];
+  const hasValue = fields.some((key) => extractionValue(record[key]) !== "");
+  if (!hasValue) return null;
+  return fields.map((key) => `${key}: ${extractionValue(record[key])}`).join("\n");
 }
 
 export function buildSessionSummary(session: TtaiSessionDetails): string | undefined {

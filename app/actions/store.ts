@@ -4,7 +4,12 @@ import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import { CallStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { buildSessionSummary, fetchTtaiSessionDetails, durationSecFromTtaiSession } from "@/lib/ttai";
+import {
+  buildSessionSummary,
+  durationSecFromTtaiSession,
+  fetchTtaiSessionDetails,
+  formatExtractionFeedback,
+} from "@/lib/ttai";
 import {
   attachSessionDetailsToStore,
   ensureTtaiWebhookStore,
@@ -532,10 +537,19 @@ export async function writeCallFeedbackForCallLog(checkoutId: string): Promise<{
   }
 
   const feedbackContext = buildCallFeedbackContext(checkout);
+  const sessionId = checkout.sessionId || attempt.sessionId;
+  let feedbackText = checkout.aiSummary ?? attempt.transcript;
+  if (sessionId) {
+    const session = await fetchTtaiSessionDetails(sessionId);
+    const extraction = session.success
+      ? formatExtractionFeedback(session.session?.extraction_results)
+      : null;
+    if (extraction) feedbackText = extraction;
+  }
   const result = await writeCallFeedbackForStore(checkout.store, {
     ...feedbackContext,
     callStatus: checkout.callStatus,
-    feedbackText: checkout.aiSummary ?? attempt.transcript,
+    feedbackText,
   });
 
   if (!result.ok) {

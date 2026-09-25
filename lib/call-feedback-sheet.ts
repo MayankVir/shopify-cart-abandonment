@@ -1,5 +1,6 @@
 import { CallStatus, type Prisma, type Store } from "@prisma/client";
 import { formatCallStatus } from "@/lib/call-status";
+import { db } from "@/lib/db";
 import {
   columnIndexToA1,
   getSheetTitleByGid,
@@ -8,8 +9,10 @@ import {
   writeSheetCells,
 } from "@/lib/google-sheets";
 import type { LineItemRecord } from "@/lib/line-items";
+import { rowToRecord } from "@/lib/sheet-sync";
 import { parseSheetUrl } from "@/lib/sheet-url";
 import { parseShippingAddressFromUserContext } from "@/lib/shipping-address";
+import { fetchTtaiSessionDetails, formatExtractionFeedback } from "@/lib/ttai";
 
 export const DEFAULT_CALL_FEEDBACK_KEY_COLUMN = "request_id";
 
@@ -350,4 +353,174 @@ export async function writeCallFeedbackForStore(
   }
   const keyColumn = store.callFeedbackKeyColumn?.trim() || DEFAULT_CALL_FEEDBACK_KEY_COLUMN;
   return writeCallFeedbackToSheet({ ...input, targetSheetUrl, keyColumn });
+}
+
+export interface ExtractionFeedbackRowResult {
+  sheetRow: number;
+  requestId: string;
+  status: "written" | "skipped" | "failed";
+  message: string;
+  wroteToSheet: boolean;
+}
+
+/**
+ * Walks the draft sheet and overwrites `ttai_call_feedback` with the call's
+ * extraction fields. Rows that already have text in that cell are replaced.
+ * Rows with no session extraction are left unchanged.
+ */
+export async function writeExtractionFeedbackForSheet(options: {
+  storeDomain: string;
+  sheetUrl: string;
+  offset: number;
+  limit: number;
+  onlySheetRows?: number[];
+}): Promise<{
+  results: ExtractionFeedbackRowResult[];
+  nextOffset: number;
+  done: boolean;
+  total: number;
+}> {
+  if (!isGoogleSheetsWriteConfigured()) {
+    throw new Error(
+      "Google Sheets write is not configured (missing service account credentials).",
+    );
+  }
+
+  const parsed = parseSheetUrl(options.sheetUrl);
+  if (!parsed) {
+    throw new Error("Invalid Google Sheets URL");
+  }
+
+  const sheetTitle = await getSheetTitleByGid(parsed.spreadsheetId, parsed.gid);
+  const rows = await readSheetValues(parsed.spreadsheetId, sheetTitle, "A1:CZ20000");
+  const rawHeaders = (rows[0] ?? []).map((cell) => cell.trim());
+  const headers = rawHeaders.map(normalizeHeader);
+  const requestIndex = headers.indexOf("request_id");
+  if (requestIndex < 0) {
+    throw new Error("Sheet is missing the request_id column");
+  }
+
+  let feedbackIndex = headers.indexOf(CALL_FEEDBACK_OUTPUT_COLUMNS.feedback);
+  if (feedbackIndex < 0) {
+    feedbackIndex = rawHeaders.length;
+    await writeSheetCells(parsed.spreadsheetId, sheetTitle, [
+      {
+        a1: `${columnIndexToA1(feedbackIndex)}1`,
+        value: CALL_FEEDBACK_OUTPUT_COLUMNS.feedback,
+      },
+    ]);
+  }
+
+  const records = rows
+    .slice(1)
+    .map((values, index) => ({
+      sheetRow: index + 2,
+      record: rowToRecord(headers, values),
+    }))
+    .filter((row) => Object.values(row.record).some((value) => value.trim()));
+
+  const scoped = options.onlySheetRows?.length
+    ? records.filter((row) => options.onlySheetRows!.includes(row.sheetRow))
+    : records;
+  const slice = scoped.slice(options.offset, options.offset + options.limit);
+  const results: ExtractionFeedbackRowResult[] = [];
+
+  for (const { sheetRow, record } of slice) {
+    const requestId = record.request_id?.trim() || "";
+    if (!requestId) {
+      results.push({
+        sheetRow,
+        requestId: "",
+        status: "skipped",
+        message: "Missing request_id",
+        wroteToSheet: false,
+      });
+      continue;
+    }
+
+    const checkout = await db.abandonedCheckout.findUnique({
+      where: { checkoutToken: requestId },
+      select: {
+        storeDomain: true,
+        callAttempts: {
+          where: { sessionId: { not: null } },
+          orderBy: { startedAt: "desc" },
+          select: { sessionId: true },
+          take: 3,
+        },
+      },
+    });
+
+    if (!checkout || checkout.storeDomain !== options.storeDomain) {
+      results.push({
+        sheetRow,
+        requestId,
+        status: "skipped",
+        message: "No call for this request",
+        wroteToSheet: false,
+      });
+      continue;
+    }
+
+    const sessionIds = checkout.callAttempts
+      .map((attempt) => attempt.sessionId)
+      .filter((id): id is string => Boolean(id));
+    if (sessionIds.length === 0) {
+      results.push({
+        sheetRow,
+        requestId,
+        status: "skipped",
+        message: "No session yet",
+        wroteToSheet: false,
+      });
+      continue;
+    }
+
+    let feedback: string | null = null;
+    let fetchError: string | null = null;
+    for (const sessionId of sessionIds) {
+      const session = await fetchTtaiSessionDetails(sessionId);
+      if (!session.success) {
+        fetchError = session.error ?? "Session details failed";
+        continue;
+      }
+      feedback = formatExtractionFeedback(session.session?.extraction_results);
+      if (feedback) break;
+    }
+
+    if (!feedback) {
+      results.push({
+        sheetRow,
+        requestId,
+        status: fetchError ? "failed" : "skipped",
+        message: fetchError ?? "No extraction on this call",
+        wroteToSheet: false,
+      });
+      continue;
+    }
+
+    await writeSheetCells(parsed.spreadsheetId, sheetTitle, [
+      { a1: `${columnIndexToA1(feedbackIndex)}${sheetRow}`, value: feedback },
+    ]);
+    const outcome = feedback
+      .split("\n")
+      .find((line) => line.startsWith("call_outcome:"))
+      ?.slice("call_outcome:".length)
+      .trim();
+    results.push({
+      sheetRow,
+      requestId,
+      status: "written",
+      message: outcome ? `Replaced feedback · ${outcome}` : "Replaced feedback",
+      wroteToSheet: true,
+    });
+  }
+
+  const nextOffset = options.offset + slice.length;
+  return {
+    results,
+    nextOffset,
+    done: nextOffset >= scoped.length,
+    total: scoped.length,
+  };
 }

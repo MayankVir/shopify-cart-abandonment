@@ -8,7 +8,12 @@ import {
   buildCallFeedbackContext,
   writeCallFeedbackIfEnabled,
 } from "@/lib/call-feedback-sheet";
-import { buildSessionSummary, fetchTtaiSessionDetails, durationSecFromTtaiSession } from "@/lib/ttai";
+import {
+  buildSessionSummary,
+  durationSecFromTtaiSession,
+  fetchTtaiSessionDetails,
+  formatExtractionFeedback,
+} from "@/lib/ttai";
 import {
   minutesFromDurationSec,
   recordCallUsage,
@@ -524,10 +529,13 @@ export async function POST(request: NextRequest) {
   // call is finished for good (connected, or the retry budget is used up).
   if (!retry.retried) {
     const feedbackContext = buildCallFeedbackContext(attempt.checkout);
+    const extractionFeedback = formatExtractionFeedback(
+      finalWebhookStore.sessionDetails?.extraction_results,
+    );
     const feedbackResult = await writeCallFeedbackIfEnabled(attempt.checkout.store, {
       ...feedbackContext,
       callStatus: outcome.callStatus,
-      feedbackText: transcript ?? attempt.checkout.aiSummary,
+      feedbackText: extractionFeedback ?? transcript ?? attempt.checkout.aiSummary,
     });
     if (!feedbackResult.ok && !feedbackResult.skipped) {
       console.warn(

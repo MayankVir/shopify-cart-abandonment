@@ -11,6 +11,7 @@ import type { DraftSheetInspection } from "@/lib/draft-sheet";
 import type { SheetsWriteVerifyResult } from "@/lib/google-sheets";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
 import { useDraftSheetRun } from "@/store/use-draft-sheet-run";
+import { useFeedbackSheetRun } from "@/store/use-feedback-sheet-run";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +37,14 @@ export function DraftSheetPanel() {
   const runBatches = useDraftSheetRun((s) => s.runBatches);
   const resetRun = useDraftSheetRun((s) => s.resetRun);
 
+  const isWritingFeedback = useFeedbackSheetRun((s) => s.isWriting);
+  const feedbackLog = useFeedbackSheetRun((s) => s.log);
+  const feedbackProgress = useFeedbackSheetRun((s) => s.progress);
+  const feedbackError = useFeedbackSheetRun((s) => s.runError);
+  const runFeedbackBatches = useFeedbackSheetRun((s) => s.runBatches);
+  const resetFeedbackRun = useFeedbackSheetRun((s) => s.resetRun);
+  const busy = isGenerating || isWritingFeedback;
+
   useEffect(() => {
     if (!selectedStoreDomain) return;
     getStoreRecoverySettings(selectedStoreDomain).then((settings) => {
@@ -49,6 +58,7 @@ export function DraftSheetPanel() {
     setInspectError(null);
     setInspection(null);
     resetRun();
+    resetFeedbackRun();
     startInspect(async () => {
       const result = await inspectDraftSheetAction(sheetUrl);
       if (!result.success || !result.inspection) {
@@ -96,11 +106,45 @@ export function DraftSheetPanel() {
     });
   }
 
+  async function handleWriteFeedback() {
+    if (!selectedStoreDomain || !sheetUrl.trim()) return;
+    await runFeedbackBatches({
+      storeDomain: selectedStoreDomain,
+      sheetUrl,
+      replaceLog: true,
+      totalHint: inspection?.dataRowCount ?? 0,
+    });
+  }
+
+  async function handleRetryFeedbackFailed() {
+    if (!selectedStoreDomain) return;
+    const failedRows = Array.from(
+      new Set(
+        feedbackLog
+          .filter((row) => row.status === "failed")
+          .map((row) => row.sheetRow),
+      ),
+    );
+    if (!failedRows.length) return;
+    await runFeedbackBatches({
+      storeDomain: selectedStoreDomain,
+      sheetUrl,
+      onlySheetRows: failedRows,
+      replaceLog: false,
+      totalHint: failedRows.length,
+    });
+  }
+
   const created = log.filter((row) => row.status === "created").length;
   const skipped = log.filter((row) => row.status === "skipped").length;
   const failed = log.filter((row) => row.status === "failed").length;
   const written = log.filter((row) => row.wroteToSheet).length;
   const showRunPanel = isGenerating || log.length > 0 || Boolean(runError);
+  const feedbackWritten = feedbackLog.filter((row) => row.status === "written").length;
+  const feedbackSkipped = feedbackLog.filter((row) => row.status === "skipped").length;
+  const feedbackFailed = feedbackLog.filter((row) => row.status === "failed").length;
+  const showFeedbackPanel =
+    isWritingFeedback || feedbackLog.length > 0 || Boolean(feedbackError);
 
   if (!selectedStoreDomain) {
     return (
@@ -125,13 +169,13 @@ export function DraftSheetPanel() {
               setVerifyResult(null);
             }}
             placeholder="https://docs.google.com/spreadsheets/d/…/edit"
-            disabled={isInspecting || isVerifying || isGenerating}
+            disabled={isInspecting || isVerifying || busy}
           />
           <p className="text-xs text-muted-foreground">
-            This module only creates draft orders and writes{" "}
-            <code>draft_order_id</code>, <code>draft_order_context</code>, and{" "}
-            <code>Repeat Customer</code> (TRUE/FALSE) back. It does not call
-            anyone.
+            Generate drafts writes <code>draft_order_id</code>,{" "}
+            <code>draft_order_context</code>, and <code>Repeat Customer</code>.
+            Write call feedback overwrites <code>ttai_call_feedback</code> with
+            the session extraction for every row. Neither action places a call.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -139,7 +183,7 @@ export function DraftSheetPanel() {
             type="button"
             variant="outline"
             onClick={handleInspect}
-            disabled={!sheetUrl.trim() || isInspecting || isVerifying || isGenerating}
+            disabled={!sheetUrl.trim() || isInspecting || isVerifying || busy}
           >
             {isInspecting ? (
               <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -152,7 +196,7 @@ export function DraftSheetPanel() {
             type="button"
             variant="outline"
             onClick={handleVerifyWrite}
-            disabled={!sheetUrl.trim() || isInspecting || isVerifying || isGenerating}
+            disabled={!sheetUrl.trim() || isInspecting || isVerifying || busy}
           >
             {isVerifying ? (
               <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -160,6 +204,18 @@ export function DraftSheetPanel() {
               <ShieldCheck className="mr-1 h-4 w-4" />
             )}
             Verify write
+          </Button>
+          <Button
+            type="button"
+            onClick={() => void handleWriteFeedback()}
+            disabled={!sheetUrl.trim() || isInspecting || isVerifying || busy}
+          >
+            {isWritingFeedback ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="mr-1 h-4 w-4" />
+            )}
+            Write call feedback
           </Button>
         </div>
         {inspectError ? (
@@ -226,14 +282,14 @@ export function DraftSheetPanel() {
                   onCheckedChange={(checked) =>
                     setSkipExisting(checked === true)
                   }
-                  disabled={isGenerating}
+                  disabled={busy}
                 />
                 Skip rows that already have a draft_order_id
               </label>
               <Button
                 type="button"
                 onClick={() => void handleGenerate()}
-                disabled={isGenerating}
+                disabled={busy}
               >
                 {isGenerating ? (
                   <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -247,7 +303,7 @@ export function DraftSheetPanel() {
                   type="button"
                   variant="outline"
                   onClick={() => void handleRetryFailed()}
-                  disabled={isGenerating}
+                  disabled={busy}
                 >
                   {isGenerating ? (
                     <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -342,6 +398,77 @@ export function DraftSheetPanel() {
                         row.isRepeatCustomer ? "TRUE" : "FALSE"
                       }`
                     : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {showFeedbackPanel ? (
+        <div className="space-y-3 rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium">
+              {isWritingFeedback
+                ? "Writing call feedback…"
+                : feedbackError
+                  ? "Feedback write stopped"
+                  : "Feedback write complete"}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {feedbackFailed > 0 && !isWritingFeedback ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleRetryFeedbackFailed()}
+                >
+                  <RotateCcw className="mr-1 h-4 w-4" />
+                  Retry failed only
+                </Button>
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                {feedbackProgress.done} / {feedbackProgress.total} rows
+              </p>
+            </div>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full bg-primary transition-all"
+              style={{
+                width:
+                  feedbackProgress.total > 0
+                    ? `${Math.min(100, (feedbackProgress.done / feedbackProgress.total) * 100)}%`
+                    : "0%",
+              }}
+            />
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <Badge variant="success">{feedbackWritten} written</Badge>
+            <Badge variant="secondary">{feedbackSkipped} skipped</Badge>
+            <Badge variant="destructive">{feedbackFailed} failed</Badge>
+          </div>
+          {feedbackError ? (
+            <p className="text-sm text-destructive">{feedbackError}</p>
+          ) : null}
+          <ul className="max-h-80 space-y-1 overflow-auto text-sm">
+            {feedbackLog.map((row) => (
+              <li
+                key={`feedback-${row.sheetRow}-${row.requestId}`}
+                className="flex flex-wrap gap-x-2 border-b border-border/50 py-1.5 last:border-0"
+              >
+                <span className="text-muted-foreground">Row {row.sheetRow}</span>
+                <span className="font-mono text-xs">{row.requestId || "—"}</span>
+                <span
+                  className={
+                    row.status === "written"
+                      ? "text-emerald-400"
+                      : row.status === "failed"
+                        ? "text-destructive"
+                        : "text-muted-foreground"
+                  }
+                >
+                  {row.status}: {row.message}
                 </span>
               </li>
             ))}
