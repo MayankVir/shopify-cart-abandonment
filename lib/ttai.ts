@@ -8,6 +8,7 @@ export interface SipDynamicVars {
   phone_number: string;
   customer_phone?: string;
   customer_name?: string;
+  name?: string;
   abandoned_ts?: string;
   cart_value?: string;
   order_context?: string;
@@ -540,7 +541,10 @@ export function buildSipDynamicVars(input: {
     customer_phone: input.phone,
   };
   const customerName = input.customerName?.trim();
-  if (customerName) vars.customer_name = customerName;
+  if (customerName) {
+    vars.customer_name = customerName;
+    vars.name = customerName;
+  }
   if (input.abandonedTs) vars.abandoned_ts = input.abandonedTs;
   if (input.cartValue != null) vars.cart_value = String(input.cartValue);
   if (input.orderContext) vars.order_context = input.orderContext;
