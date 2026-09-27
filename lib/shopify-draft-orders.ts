@@ -8,6 +8,25 @@ import {
 
 const ADMIN_API_VERSION = "2024-10";
 
+/** Product total below this gets a delivery charge. ₹750 and above is free. */
+const FREE_DELIVERY_MINIMUM = 750;
+const DELIVERY_CHARGE_AMOUNT = 65;
+const DELIVERY_CHARGE_TITLE = "Standard Charge";
+const FREE_DELIVERY_TITLE = "Free Shipping";
+
+const VARIANT_PRICES = `
+query VariantPrices($ids: [ID!]!) {
+  shop {
+    currencyCode
+  }
+  nodes(ids: $ids) {
+    ... on ProductVariant {
+      id
+      price
+    }
+  }
+}`;
+
 const DRAFT_ORDER_CREATE = `
 mutation DraftOrderCreate($input: DraftOrderInput!) {
   draftOrderCreate(input: $input) {
@@ -46,6 +65,11 @@ query DraftOrder($id: ID!) {
       }
     }
     totalTaxSet {
+      shopMoney {
+        amount
+      }
+    }
+    totalShippingPriceSet {
       shopMoney {
         amount
       }
@@ -115,6 +139,7 @@ type DraftOrderGraphNode = {
   totalPriceSet?: { shopMoney: { amount: string; currencyCode: string } };
   subtotalPriceSet?: { shopMoney: { amount: string } };
   totalTaxSet?: { shopMoney: { amount: string } };
+  totalShippingPriceSet?: { shopMoney: { amount: string } };
   lineItems?: {
     edges: Array<{
       node: {
@@ -161,6 +186,9 @@ export function flattenDraftOrderContext(
     total_price: draft.totalPriceSet?.shopMoney?.amount ?? "",
     subtotal_price: draft.subtotalPriceSet?.shopMoney?.amount ?? "",
     total_tax: draft.totalTaxSet?.shopMoney?.amount ?? "",
+    shipping_price: draft.totalShippingPriceSet?.shopMoney?.amount ?? "",
+    order_value: draft.subtotalPriceSet?.shopMoney?.amount ?? "",
+    delivery_charge: draft.totalShippingPriceSet?.shopMoney?.amount ?? "",
     line_items: JSON.stringify(lineItems),
   };
 
@@ -258,7 +286,55 @@ function isAddressRelatedError(userErrors: UserError[]): boolean {
   });
 }
 
-function buildDraftInput(input: CreateDraftOrderInput) {
+/** ₹65 delivery under ₹750. ₹0 at ₹750 and above. */
+export function deliveryChargeForMerchandiseTotal(merchandiseTotal: number): {
+  title: string;
+  amount: string;
+} {
+  if (merchandiseTotal < FREE_DELIVERY_MINIMUM) {
+    return { title: DELIVERY_CHARGE_TITLE, amount: DELIVERY_CHARGE_AMOUNT.toFixed(2) };
+  }
+  return { title: FREE_DELIVERY_TITLE, amount: "0.00" };
+}
+
+async function merchandiseTotalForDraft(
+  storeDomain: string,
+  accessToken: string,
+  lineItems: LineItemRecord[],
+): Promise<{ total: number; currencyCode: string }> {
+  const items = lineItems.filter((item) => item.variant_gid);
+  if (!items.length) {
+    throw new Error("No variant IDs available for draft order");
+  }
+  const ids = [...new Set(items.map((item) => item.variant_gid))];
+  const data = await adminGraphql<{
+    shop: { currencyCode: string };
+    nodes: Array<{ id: string; price: string } | null>;
+  }>(storeDomain, accessToken, VARIANT_PRICES, { ids });
+
+  const priceById = new Map<string, number>();
+  for (const node of data.nodes) {
+    if (!node?.id) continue;
+    const price = Number(node.price);
+    if (Number.isFinite(price)) priceById.set(node.id, price);
+  }
+
+  let total = 0;
+  for (const item of items) {
+    const price = priceById.get(item.variant_gid);
+    if (price == null) {
+      throw new Error(`Missing Shopify price for variant ${item.variant_gid}`);
+    }
+    total += price * Math.max(1, Number(item.quantity) || 1);
+  }
+  return { total, currencyCode: data.shop.currencyCode };
+}
+
+function buildDraftInput(
+  input: CreateDraftOrderInput,
+  merchandiseTotal: number,
+  currencyCode: string,
+) {
   const lineItems = input.lineItems
     .filter((item) => item.variant_gid)
     .map((item) => ({
@@ -275,6 +351,7 @@ function buildDraftInput(input: CreateDraftOrderInput) {
     tags.push(input.checkoutToken);
   }
 
+  const delivery = deliveryChargeForMerchandiseTotal(merchandiseTotal);
   const draftInput: Record<string, unknown> = {
     lineItems,
     tags,
@@ -284,6 +361,13 @@ function buildDraftInput(input: CreateDraftOrderInput) {
     // Email/phone still attach an existing Shopify customer, but this stops
     // their saved default address from being copied onto the order.
     useCustomerDefaultAddress: false,
+    shippingLine: {
+      title: delivery.title,
+      priceWithCurrency: {
+        amount: delivery.amount,
+        currencyCode,
+      },
+    },
   };
 
   if (input.email?.trim()) draftInput.email = input.email.trim();
@@ -310,7 +394,12 @@ export async function createDraftOrderForStore(
   input: CreateDraftOrderInput,
 ): Promise<CreateDraftOrderResult> {
   const { token } = await resolveStoreAdminAccessToken(store);
-  const draftInput = buildDraftInput(input);
+  const { total: merchandiseTotal, currencyCode } = await merchandiseTotalForDraft(
+    store.storeDomain,
+    token,
+    input.lineItems,
+  );
+  const draftInput = buildDraftInput(input, merchandiseTotal, currencyCode);
 
   const data = await adminGraphql<{
     draftOrderCreate: {

@@ -17,6 +17,8 @@ export interface SipDynamicVars {
   draft_order_id?: string;
   draft_order_name?: string;
   draft_order_context?: string;
+  order_value?: string;
+  delivery_charge?: string;
   /** Pass to draftOrderComplete so the order stays unpaid (COD). */
   payment_pending?: string;
   /** Sheet shipping address as one concatenated string. */
@@ -590,7 +592,23 @@ export function buildSipDynamicVars(input: {
     vars.payment_pending = "true";
   }
   if (input.draftOrderName) vars.draft_order_name = input.draftOrderName;
-  if (input.draftOrderContext) vars.draft_order_context = input.draftOrderContext;
+  if (input.draftOrderContext) {
+    vars.draft_order_context = input.draftOrderContext;
+    try {
+      const ctx = JSON.parse(input.draftOrderContext) as Record<
+        string,
+        unknown
+      >;
+      if (ctx.order_value != null && String(ctx.order_value) !== "") {
+        vars.order_value = String(ctx.order_value);
+      }
+      if (ctx.delivery_charge != null && String(ctx.delivery_charge) !== "") {
+        vars.delivery_charge = String(ctx.delivery_charge);
+      }
+    } catch {
+      // draft_order_context is still sent as the JSON blob
+    }
+  }
 
   const address = formatShippingAddress(input.shippingAddress ?? null);
   if (address) vars.address = address;

@@ -87,6 +87,12 @@ function abandonmentDateLabel(shopifyCreatedAt: string | null): string {
   return shopifyCreatedAt ? formatDateLabel(shopifyCreatedAt) : "No date";
 }
 
+function checkoutSortTime(checkout: AbandonedCheckoutRow): number {
+  return checkout.shopifyCreatedAt
+    ? new Date(checkout.shopifyCreatedAt).getTime()
+    : 0;
+}
+
 function ScheduleCell({
   scheduledCallAt,
   callStatus,
@@ -328,16 +334,44 @@ export function AbandonedCheckoutsPanel() {
   const [isDetailCalling, startDetailCall] = useTransition();
   const [isDetailStopping, startDetailStop] = useTransition();
 
-  const displayedCheckouts = [
-    ...checkouts,
-    ...completedCheckouts.filter((checkout) =>
-      shownCompletedDates.has(abandonmentDateLabel(checkout.shopifyCreatedAt)),
-    ),
-  ].sort((a, b) => {
-    const aTime = a.shopifyCreatedAt ? new Date(a.shopifyCreatedAt).getTime() : 0;
-    const bTime = b.shopifyCreatedAt ? new Date(b.shopifyCreatedAt).getTime() : 0;
-    return bTime - aTime;
-  });
+  const dateGroups = (() => {
+    const groups = new Map<
+      string,
+      { label: string; sortTime: number; rows: AbandonedCheckoutRow[] }
+    >();
+
+    function ensureGroup(checkout: AbandonedCheckoutRow) {
+      const label = abandonmentDateLabel(checkout.shopifyCreatedAt);
+      const time = checkoutSortTime(checkout);
+      const existing = groups.get(label);
+      if (!existing) {
+        const created = { label, sortTime: time, rows: [] as AbandonedCheckoutRow[] };
+        groups.set(label, created);
+        return created;
+      }
+      if (time > existing.sortTime) existing.sortTime = time;
+      return existing;
+    }
+
+    for (const checkout of checkouts) {
+      ensureGroup(checkout).rows.push(checkout);
+    }
+    for (const checkout of completedCheckouts) {
+      const group = ensureGroup(checkout);
+      if (shownCompletedDates.has(group.label)) {
+        group.rows.push(checkout);
+      }
+    }
+
+    return [...groups.values()]
+      .map((group) => ({
+        ...group,
+        rows: [...group.rows].sort(
+          (a, b) => checkoutSortTime(b) - checkoutSortTime(a),
+        ),
+      }))
+      .sort((a, b) => b.sortTime - a.sortTime);
+  })();
   const selectableCheckouts = checkouts.filter((checkout) =>
     canSelectCheckout(
       checkout.callStatus,
@@ -917,7 +951,7 @@ export function AbandonedCheckoutsPanel() {
               Loading abandoned checkouts…
             </p>
           </div>
-        ) : checkouts.length === 0 ? (
+        ) : checkouts.length === 0 && completedCheckouts.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-sm text-muted-foreground">
               {isSyncing
@@ -1005,12 +1039,8 @@ export function AbandonedCheckoutsPanel() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {displayedCheckouts.map((checkout, index) => {
-                    const dateLabel = abandonmentDateLabel(checkout.shopifyCreatedAt);
-                    const previous = index > 0 ? displayedCheckouts[index - 1] : null;
-                    const previousLabel = previous
-                      ? abandonmentDateLabel(previous.shopifyCreatedAt)
-                      : null;
+                  {dateGroups.map((group) => {
+                    const dateLabel = group.label;
                     const dateCheckouts = checkouts.filter(
                       (row) =>
                         abandonmentDateLabel(row.shopifyCreatedAt) === dateLabel &&
@@ -1026,77 +1056,71 @@ export function AbandonedCheckoutsPanel() {
                     const allOnDateSelected =
                       dateCheckouts.length > 0 &&
                       selectedOnDate === dateCheckouts.length;
+                    const completedOnDate = completedCheckouts.filter(
+                      (row) =>
+                        abandonmentDateLabel(row.shopifyCreatedAt) === dateLabel,
+                    ).length;
 
                     return (
-                      <Fragment key={checkout.id}>
-                        {dateLabel !== previousLabel ? (
-                          <TableRow className="border-0 hover:bg-transparent">
-                            <TableCell className="border-0 bg-foreground/10 px-3 py-2.5">
-                              <Checkbox
-                                checked={
-                                  selectedOnDate > 0 && !allOnDateSelected
-                                    ? "indeterminate"
-                                    : allOnDateSelected
-                                }
-                                disabled={dateCheckouts.length === 0}
-                                onCheckedChange={(checked) =>
-                                  toggleDateSelection(dateLabel, checked === true)
-                                }
-                                aria-label={`Select all checkouts from ${dateLabel}`}
-                              />
-                            </TableCell>
-                            <TableCell
-                              colSpan={6}
-                              className="border-0 bg-foreground/10 px-3 py-2.5"
-                            >
-                              <div className="flex flex-wrap items-center gap-3">
-                                <span className="text-sm font-semibold uppercase tracking-wide text-foreground">
-                                  {dateLabel}
-                                </span>
-                                {completedCheckouts.some(
-                                  (row) =>
-                                    abandonmentDateLabel(row.shopifyCreatedAt) ===
-                                    dateLabel,
-                                ) ? (
-                                  <button
-                                    type="button"
-                                    className="text-xs font-medium text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
-                                    onClick={() => toggleCompletedDate(dateLabel)}
-                                  >
-                                    {shownCompletedDates.has(dateLabel)
-                                      ? "Hide completed"
-                                      : `Show completed (${
-                                          completedCheckouts.filter(
-                                            (row) =>
-                                              abandonmentDateLabel(
-                                                row.shopifyCreatedAt,
-                                              ) === dateLabel,
-                                          ).length
-                                        })`}
-                                  </button>
-                                ) : null}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ) : null}
-                        <CheckoutRow
-                          checkout={checkout}
-                          selectable={canSelectCheckout(
-                            checkout.callStatus,
-                            checkout.callScheduled,
-                            checkout.customerPhone,
-                          )}
-                          selected={selectedIds.has(checkout.id)}
-                          autoCallsEnabled={autoCallsEnabled}
-                          onSelectedChange={(selected) =>
-                            toggleCheckoutSelection(checkout.id, selected)
-                          }
-                          onOpenDetails={() => setDetailCheckout(checkout)}
-                          onSchedule={() => setEditingCheckout(checkout)}
-                          onRefresh={() => {
-                            void refreshOpenCheckouts({ silent: true });
-                          }}
-                        />
+                      <Fragment key={dateLabel}>
+                        <TableRow className="border-0 hover:bg-transparent">
+                          <TableCell className="border-0 bg-foreground/10 px-3 py-2.5">
+                            <Checkbox
+                              checked={
+                                selectedOnDate > 0 && !allOnDateSelected
+                                  ? "indeterminate"
+                                  : allOnDateSelected
+                              }
+                              disabled={dateCheckouts.length === 0}
+                              onCheckedChange={(checked) =>
+                                toggleDateSelection(dateLabel, checked === true)
+                              }
+                              aria-label={`Select all checkouts from ${dateLabel}`}
+                            />
+                          </TableCell>
+                          <TableCell
+                            colSpan={6}
+                            className="border-0 bg-foreground/10 px-3 py-2.5"
+                          >
+                            <div className="flex flex-wrap items-center gap-3">
+                              <span className="text-sm font-semibold uppercase tracking-wide text-foreground">
+                                {dateLabel}
+                              </span>
+                              {completedOnDate > 0 ? (
+                                <button
+                                  type="button"
+                                  className="text-xs font-medium text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+                                  onClick={() => toggleCompletedDate(dateLabel)}
+                                >
+                                  {shownCompletedDates.has(dateLabel)
+                                    ? "Hide completed"
+                                    : `Show completed (${completedOnDate})`}
+                                </button>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                        {group.rows.map((checkout) => (
+                          <CheckoutRow
+                            key={checkout.id}
+                            checkout={checkout}
+                            selectable={canSelectCheckout(
+                              checkout.callStatus,
+                              checkout.callScheduled,
+                              checkout.customerPhone,
+                            )}
+                            selected={selectedIds.has(checkout.id)}
+                            autoCallsEnabled={autoCallsEnabled}
+                            onSelectedChange={(selected) =>
+                              toggleCheckoutSelection(checkout.id, selected)
+                            }
+                            onOpenDetails={() => setDetailCheckout(checkout)}
+                            onSchedule={() => setEditingCheckout(checkout)}
+                            onRefresh={() => {
+                              void refreshOpenCheckouts({ silent: true });
+                            }}
+                          />
+                        ))}
                       </Fragment>
                     );
                   })}
