@@ -363,7 +363,7 @@ export function AbandonedCheckoutsPanel() {
       }
     }
 
-    return [...groups.values()]
+    return Array.from(groups.values())
       .map((group) => ({
         ...group,
         rows: [...group.rows].sort(

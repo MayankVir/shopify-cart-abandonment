@@ -306,7 +306,7 @@ async function merchandiseTotalForDraft(
   if (!items.length) {
     throw new Error("No variant IDs available for draft order");
   }
-  const ids = [...new Set(items.map((item) => item.variant_gid))];
+  const ids = Array.from(new Set(items.map((item) => item.variant_gid)));
   const data = await adminGraphql<{
     shop: { currencyCode: string };
     nodes: Array<{ id: string; price: string } | null>;
