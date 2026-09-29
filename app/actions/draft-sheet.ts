@@ -98,6 +98,7 @@ export async function writeExtractionFeedbackBatchAction(input: {
   offset: number;
   limit?: number;
   onlySheetRows?: number[];
+  startSheetRow?: number;
 }): Promise<{
   success: boolean;
   error?: string;
@@ -116,6 +117,7 @@ export async function writeExtractionFeedbackBatchAction(input: {
       offset: input.offset,
       limit: input.limit ?? 1,
       onlySheetRows: input.onlySheetRows,
+      startSheetRow: input.startSheetRow,
     });
     return { success: true, ...batch };
   } catch (error) {

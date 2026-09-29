@@ -29,6 +29,8 @@ export function DraftSheetPanel() {
     null
   );
   const [skipExisting, setSkipExisting] = useState(true);
+  const [startRow, setStartRow] = useState("");
+  const [startRowError, setStartRowError] = useState<string | null>(null);
 
   const isGenerating = useDraftSheetRun((s) => s.isGenerating);
   const log = useDraftSheetRun((s) => s.log);
@@ -106,11 +108,26 @@ export function DraftSheetPanel() {
     });
   }
 
+  function parseStartSheetRow(): number | undefined {
+    const trimmed = startRow.trim();
+    if (!trimmed) return undefined;
+    const value = Number(trimmed);
+    if (!Number.isInteger(value) || value < 2) return undefined;
+    return value;
+  }
+
   async function handleWriteFeedback() {
     if (!selectedStoreDomain || !sheetUrl.trim()) return;
+    const startSheetRow = parseStartSheetRow();
+    if (startRow.trim() && startSheetRow == null) {
+      setStartRowError("Enter a sheet row of 2 or higher. Row 1 is the header.");
+      return;
+    }
+    setStartRowError(null);
     await runFeedbackBatches({
       storeDomain: selectedStoreDomain,
       sheetUrl,
+      startSheetRow,
       replaceLog: true,
       totalHint: inspection?.dataRowCount ?? 0,
     });
@@ -174,11 +191,32 @@ export function DraftSheetPanel() {
           <p className="text-xs text-muted-foreground">
             Generate drafts writes <code>draft_order_id</code>,{" "}
             <code>draft_order_context</code>, and <code>Repeat Customer</code>.
-            Write call feedback overwrites <code>ttai_call_feedback</code> with
-            the session extraction for every row. Neither action places a call.
+            Write call feedback keeps <code>ttai_call_feedback</code>, then adds
+            one column per dial (<code>ttai_retry_1</code>,{" "}
+            <code>ttai_retry_2</code>, …). Each cell has that dial's status,
+            extraction, and session link. Neither action places a call.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="space-y-1">
+            <Label htmlFor="feedback-start-row" className="text-xs">
+              Start from row
+            </Label>
+            <Input
+              id="feedback-start-row"
+              type="number"
+              min={2}
+              inputMode="numeric"
+              value={startRow}
+              onChange={(event) => {
+                setStartRow(event.target.value);
+                setStartRowError(null);
+              }}
+              placeholder="2"
+              className="h-10 w-28"
+              disabled={isInspecting || isVerifying || busy}
+            />
+          </div>
           <Button
             type="button"
             variant="outline"
@@ -218,6 +256,13 @@ export function DraftSheetPanel() {
             Write call feedback
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          Leave the row blank to start at the top. If a write stops, enter the
+          sheet row it stopped on and run again. Earlier rows are left as they are.
+        </p>
+        {startRowError ? (
+          <p className="text-sm text-destructive">{startRowError}</p>
+        ) : null}
         {inspectError ? (
           <p className="text-sm text-destructive">{inspectError}</p>
         ) : null}
@@ -429,6 +474,9 @@ export function DraftSheetPanel() {
               ) : null}
               <p className="text-xs text-muted-foreground">
                 {feedbackProgress.done} / {feedbackProgress.total} rows
+                {feedbackLog.length > 0
+                  ? ` · last row ${feedbackLog[feedbackLog.length - 1]?.sheetRow}`
+                  : ""}
               </p>
             </div>
           </div>

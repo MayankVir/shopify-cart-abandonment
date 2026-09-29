@@ -2,7 +2,8 @@
 
 import { CallStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { durationSecFromAttempt, analyticsDateRangeToIso, type AnalyticsDateRange } from "@/lib/analytics";
+import { durationSecFromAttempt, analyticsRangeBounds, type AnalyticsDateRange } from "@/lib/analytics";
+import { resolveStoreTimeZone } from "@/lib/call-window";
 import { assertStoreAccess } from "@/lib/store-access";
 import {
   durationSecFromTtaiSession,
@@ -108,7 +109,8 @@ async function backfillMissingDurations(
 }
 
 export async function getCallAnalyticsForStore(
-  storeDomain: string
+  storeDomain: string,
+  range?: { start?: Date; end?: Date },
 ): Promise<{
   summary: CallAnalyticsSummary;
   attempts: CallAttemptRow[];
@@ -122,12 +124,31 @@ export async function getCallAnalyticsForStore(
     };
   }
 
-  const attempts = await db.callAttempt.findMany({
-    where: {
-      checkout: { storeDomain },
-      status: { notIn: [CallStatus.PENDING, CallStatus.PREPARING] },
-    },
-    include: {
+  const where = {
+    checkout: { storeDomain },
+    status: { notIn: [CallStatus.PENDING, CallStatus.PREPARING] },
+    ...(range?.start || range?.end
+      ? {
+          startedAt: {
+            ...(range.start ? { gte: range.start } : {}),
+            ...(range.end ? { lte: range.end } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const [attempts, totalCalls, completedCalls, failedCalls] = await Promise.all([
+    db.callAttempt.findMany({
+    where,
+    select: {
+      id: true,
+      sessionId: true,
+      callId: true,
+      status: true,
+      trigger: true,
+      durationSec: true,
+      startedAt: true,
+      endedAt: true,
       checkout: {
         select: {
           id: true,
@@ -139,13 +160,52 @@ export async function getCallAnalyticsForStore(
     },
     orderBy: { startedAt: "desc" },
     take: 200,
-  });
+    }),
+    db.callAttempt.count({ where }),
+    db.callAttempt.count({ where: { ...where, status: CallStatus.COMPLETED } }),
+    db.callAttempt.count({
+      where: { ...where, status: { in: FAILED_STATUSES } },
+    }),
+  ]);
 
-  const backfilled = await backfillMissingDurations(attempts);
+  const missingDurationIds = attempts
+    .filter((attempt) => {
+      if (!attempt.sessionId) return false;
+      if (attempt.durationSec != null && attempt.durationSec > 0) return false;
+      if (attempt.endedAt) {
+        const fromClock = Math.round(
+          (attempt.endedAt.getTime() - attempt.startedAt.getTime()) / 1000
+        );
+        if (fromClock > 0) return false;
+      }
+      return true;
+    })
+    .slice(0, BACKFILL_BATCH_SIZE)
+    .map((attempt) => attempt.id);
+
+  const blobRows =
+    missingDurationIds.length === 0
+      ? []
+      : await db.callAttempt.findMany({
+          where: { id: { in: missingDurationIds } },
+          select: { id: true, toolCallsJson: true },
+        });
+  const blobs = new Map(blobRows.map((row) => [row.id, row.toolCallsJson]));
+
+  const backfilled = await backfillMissingDurations(
+    attempts.map((attempt) => ({
+      ...attempt,
+      toolCallsJson: blobs.get(attempt.id) ?? null,
+    }))
+  );
 
   const rows: CallAttemptRow[] = attempts.map((attempt) => {
     const durationSec =
-      backfilled.get(attempt.id) ?? durationSecFromAttempt(attempt);
+      backfilled.get(attempt.id) ??
+      durationSecFromAttempt({
+        ...attempt,
+        toolCallsJson: blobs.get(attempt.id) ?? null,
+      });
     return {
       id: attempt.id,
       checkoutId: attempt.checkout.id,
@@ -165,9 +225,9 @@ export async function getCallAnalyticsForStore(
 
   return {
     summary: {
-      totalCalls: rows.length,
-      completedCalls: rows.filter((r) => r.status === CallStatus.COMPLETED).length,
-      failedCalls: rows.filter((r) => FAILED_STATUSES.includes(r.status)).length,
+      totalCalls,
+      completedCalls,
+      failedCalls,
       totalDurationSec,
       totalMinutes: Math.round((totalDurationSec / 60) * 10) / 10,
       callsWithDuration: rows.filter((r) => r.durationSec > 0).length,
@@ -196,6 +256,9 @@ export interface StoreAnalyticsView {
   summary: CallAnalyticsSummary;
   timeSeries: TtaiAnalyticsTimeSeriesPoint[];
   attempts: CallAttemptRow[];
+  /** Inclusive instants for the selected range. Absent for all time. */
+  rangeStart?: string;
+  rangeEnd?: string;
   ttaiError?: string;
 }
 
@@ -214,18 +277,25 @@ export async function getStoreAnalyticsView(
     };
   }
 
-  const local = await getCallAnalyticsForStore(storeDomain);
-  const { startDate, endDate } = analyticsDateRangeToIso(dateRange);
-
   const store = await db.store.findUnique({
     where: { storeDomain },
-    select: { ttaiScenarioId: true },
+    select: {
+      ttaiScenarioId: true,
+      ianaTimezone: true,
+      ianaTimezoneOverride: true,
+    },
   });
+  const timeZone = resolveStoreTimeZone({
+    ianaTimezone: store?.ianaTimezone,
+    ianaTimezoneOverride: store?.ianaTimezoneOverride,
+  });
+  const bounds = analyticsRangeBounds(dateRange, timeZone);
+  const local = await getCallAnalyticsForStore(storeDomain, bounds);
 
   const ttaiResult = await fetchTtaiUnifiedAnalytics({
     isOrg: true,
-    startDate,
-    endDate,
+    startDate: bounds.startDate,
+    endDate: bounds.endDate,
   });
 
   if (!ttaiResult.success || !ttaiResult.data) {
@@ -234,6 +304,8 @@ export async function getStoreAnalyticsView(
       summary: local.summary,
       timeSeries: [],
       attempts: local.attempts,
+      rangeStart: bounds.start?.toISOString(),
+      rangeEnd: bounds.end?.toISOString(),
       ttaiError: ttaiResult.error,
     };
   }
@@ -246,13 +318,23 @@ export async function getStoreAnalyticsView(
 
   const summary = mergeTtaiSummary(local.summary, scenario, ttaiResult.data);
 
+  const timeSeries = (ttaiResult.data.org_dashboard?.time_series ?? []).filter(
+    (point) => {
+      if (!bounds.startDate || !bounds.endDate) return true;
+      const day = point.date.slice(0, 10);
+      return day >= bounds.startDate && day <= bounds.endDate;
+    },
+  );
+
   return {
     source: scenario || ttaiResult.data.org_dashboard ? "ttai" : "local",
     scenarioName: scenario?.scenario_name,
     avgScore: scenario?.avg_score,
     summary,
-    timeSeries: ttaiResult.data.org_dashboard?.time_series ?? [],
+    timeSeries,
     attempts: local.attempts,
+    rangeStart: bounds.start?.toISOString(),
+    rangeEnd: bounds.end?.toISOString(),
   };
 }
 

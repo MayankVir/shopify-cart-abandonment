@@ -46,6 +46,20 @@ export function formatDateLabel(value: Date | string): string {
   return `${date.getDate()} ${MONTH_LABELS[date.getMonth()]} ${date.getFullYear()}`;
 }
 
+/** Same label as formatDateLabel, using an IANA timezone instead of the host zone. */
+export function formatDateLabelInTimeZone(value: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    day: "numeric",
+    month: "numeric",
+    year: "numeric",
+  }).formatToParts(value);
+  const day = Number(parts.find((part) => part.type === "day")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const year = parts.find((part) => part.type === "year")?.value;
+  return `${day} ${MONTH_LABELS[month - 1]} ${year}`;
+}
+
 /** "04:50 PM" */
 export function formatTimeLabel(value: Date | string): string {
   const date = typeof value === "string" ? new Date(value) : value;

@@ -1,20 +1,17 @@
 "use client";
 
 import { useEffect } from "react";
-import { CallStatus } from "@prisma/client";
 import {
   getCheckoutLogsForStore,
   getStoresForDashboard,
 } from "@/app/actions/store";
-import { isActiveCall } from "@/lib/call-status";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
 
 interface DashboardHydratorProps {
   initialStores: Awaited<ReturnType<typeof getStoresForDashboard>>;
 }
 
-const CALL_LOG_POLL_MS = 15_000;
-const CALL_LOG_POLL_ACTIVE_MS = 5_000;
+const CALL_LOG_POLL_MS = 30_000;
 
 export function DashboardHydrator({ initialStores }: DashboardHydratorProps) {
   const setSelectedStoreDomain = useAnalyticsStore(
@@ -22,11 +19,6 @@ export function DashboardHydrator({ initialStores }: DashboardHydratorProps) {
   );
   const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
   const setCallLogs = useAnalyticsStore((s) => s.setCallLogs);
-  const callLogs = useAnalyticsStore((s) => s.callLogs);
-
-  const hasInFlightCalls = callLogs.some((log) =>
-    isActiveCall(log.callStatus as CallStatus)
-  );
 
   useEffect(() => {
     if (!selectedStoreDomain && initialStores[0]) {
@@ -51,16 +43,13 @@ export function DashboardHydrator({ initialStores }: DashboardHydratorProps) {
     }
 
     loadLogs();
-    const intervalMs = hasInFlightCalls
-      ? CALL_LOG_POLL_ACTIVE_MS
-      : CALL_LOG_POLL_MS;
-    const interval = setInterval(loadLogs, intervalMs);
+    const interval = setInterval(loadLogs, CALL_LOG_POLL_MS);
 
     return () => {
       active = false;
       clearInterval(interval);
     };
-  }, [selectedStoreDomain, setCallLogs, hasInFlightCalls]);
+  }, [selectedStoreDomain, setCallLogs]);
 
   return null;
 }

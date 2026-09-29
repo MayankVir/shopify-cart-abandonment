@@ -57,8 +57,26 @@ function sourceFilter(direction: IntegrationEventDirection): string[] | null {
   return null;
 }
 
+const EVENT_LIST_SELECT = {
+  id: true,
+  source: true,
+  eventType: true,
+  outcome: true,
+  httpStatus: true,
+  sessionId: true,
+  callId: true,
+  storeDomain: true,
+  callAttemptId: true,
+  checkoutId: true,
+  deliveryId: true,
+  payloadBytes: true,
+  note: true,
+  receivedAt: true,
+  processingMs: true,
+} satisfies Prisma.WebhookEventSelect;
+
 function toRow(
-  event: Awaited<ReturnType<typeof db.webhookEvent.findMany>>[number]
+  event: Prisma.WebhookEventGetPayload<{ select: typeof EVENT_LIST_SELECT }>
 ): IntegrationEventRow {
   return {
     id: event.id,
@@ -72,7 +90,7 @@ function toRow(
     callAttemptId: event.callAttemptId,
     checkoutId: event.checkoutId,
     deliveryId: event.deliveryId,
-    payload: event.payload,
+    payload: null,
     payloadBytes: event.payloadBytes,
     note: event.note,
     receivedAt: event.receivedAt.toISOString(),
@@ -129,6 +147,7 @@ export async function getIntegrationEvents(
     where,
     orderBy: { receivedAt: "desc" },
     take: limit + 1,
+    select: EVENT_LIST_SELECT,
   });
 
   return {
@@ -137,6 +156,27 @@ export async function getIntegrationEvents(
     hasMore: events.length > limit,
     includesUnmatched,
   };
+}
+
+export async function getIntegrationEventPayload(
+  eventId: string
+): Promise<{ success: boolean; payload?: unknown; error?: string }> {
+  const event = await db.webhookEvent.findUnique({
+    where: { id: eventId },
+    select: { storeDomain: true, payload: true },
+  });
+  if (!event) {
+    return { success: false, error: "Event not found" };
+  }
+
+  if (event.storeDomain) {
+    const accessError = await guardStoreAccess(event.storeDomain);
+    if (accessError) return { success: false, error: accessError };
+  } else if (!(await isCurrentUserAdmin())) {
+    return { success: false, error: "Forbidden" };
+  }
+
+  return { success: true, payload: event.payload };
 }
 
 export async function getIntegrationEventOutcomes(

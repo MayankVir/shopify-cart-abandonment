@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useState, useTransition } from "react
 import { ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import {
   getIntegrationEventOutcomes,
+  getIntegrationEventPayload,
   getIntegrationEvents,
   type IntegrationEventDirection,
   type IntegrationEventRow,
@@ -87,6 +88,10 @@ export function IntegrationLogsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [outcomes, setOutcomes] = useState<string[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [payloads, setPayloads] = useState<
+    Record<string, { payload?: unknown; error?: string }>
+  >({});
+  const [loadingPayloadId, setLoadingPayloadId] = useState<string | null>(null);
 
   const [direction, setDirection] = useState<IntegrationEventDirection>("all");
   const [outcome, setOutcome] = useState<string>(ALL_OUTCOMES);
@@ -159,6 +164,26 @@ export function IntegrationLogsPanel() {
       if (!result.success) return;
       setEvents((current) => [...current, ...result.events]);
       setHasMore(result.hasMore);
+    });
+  }
+
+  function handleToggle(eventId: string) {
+    if (expandedId === eventId) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(eventId);
+    if (payloads[eventId] || loadingPayloadId === eventId) return;
+
+    setLoadingPayloadId(eventId);
+    void getIntegrationEventPayload(eventId).then((result) => {
+      setPayloads((current) => ({
+        ...current,
+        [eventId]: result.success
+          ? { payload: result.payload }
+          : { error: result.error ?? "Could not load payload" },
+      }));
+      setLoadingPayloadId((current) => (current === eventId ? null : current));
     });
   }
 
@@ -274,9 +299,7 @@ export function IntegrationLogsPanel() {
                   <Fragment key={event.id}>
                     <TableRow
                       className="cursor-pointer"
-                      onClick={() =>
-                        setExpandedId(expanded ? null : event.id)
-                      }
+                      onClick={() => handleToggle(event.id)}
                     >
                       <TableCell className="px-3 py-2 text-muted-foreground">
                         {expanded ? (
@@ -341,9 +364,24 @@ export function IntegrationLogsPanel() {
                             {event.note ? (
                               <p className="text-xs text-foreground">{event.note}</p>
                             ) : null}
-                            <pre className="max-h-80 overflow-auto rounded-md bg-background p-3 text-xs leading-relaxed">
-                              {JSON.stringify(event.payload, null, 2)}
-                            </pre>
+                            {loadingPayloadId === event.id && !payloads[event.id] ? (
+                              <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                Loading payload…
+                              </p>
+                            ) : payloads[event.id]?.error ? (
+                              <p className="text-xs text-destructive">
+                                {payloads[event.id]?.error}
+                              </p>
+                            ) : (
+                              <pre className="max-h-80 overflow-auto rounded-md bg-background p-3 text-xs leading-relaxed">
+                                {JSON.stringify(
+                                  payloads[event.id]?.payload ?? null,
+                                  null,
+                                  2
+                                )}
+                              </pre>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>

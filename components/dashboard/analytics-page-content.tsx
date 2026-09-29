@@ -10,10 +10,7 @@ import {
 import { CallLogPanel } from "@/components/dashboard/call-log-panel";
 import { TtaiTimeSeriesPanel } from "@/components/dashboard/ttai-time-series-panel";
 import { useStoreAnalytics } from "@/hooks/use-store-analytics";
-import {
-  analyticsDateRangeToIso,
-  type AnalyticsDateRange,
-} from "@/lib/analytics";
+import { type AnalyticsDateRange } from "@/lib/analytics";
 import { Card, CardContent } from "@/components/ui/card";
 
 export function AnalyticsPageContent() {
@@ -64,7 +61,8 @@ export function AnalyticsPageContent() {
               />
               <CallLogPanel
                 summary={data.summary}
-                since={analyticsDateRangeToIso(dateRange).startDate}
+                since={data.rangeStart}
+                until={data.rangeEnd}
               />
             </>
           )}

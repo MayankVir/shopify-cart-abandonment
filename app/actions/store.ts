@@ -8,7 +8,6 @@ import {
   buildSessionSummary,
   durationSecFromTtaiSession,
   fetchTtaiSessionDetails,
-  formatExtractionFeedback,
 } from "@/lib/ttai";
 import {
   attachSessionDetailsToStore,
@@ -16,6 +15,7 @@ import {
 } from "@/lib/ttai-webhook";
 import {
   buildCallFeedbackContext,
+  loadAttemptSheetCells,
   writeCallFeedbackForStore,
 } from "@/lib/call-feedback-sheet";
 import type { CallLogEntry } from "@/store/use-analytics-store";
@@ -352,13 +352,118 @@ type CheckoutWithLatestAttempt = Prisma.AbandonedCheckoutGetPayload<{
   };
 }>;
 
-/** Shared by every query that feeds the call log, so rows never differ by caller. */
+/** Single-row reads (session fetch) still load the transcript and tool-call JSON. */
 const CALL_LOG_INCLUDE = {
   callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
   _count: { select: { callAttempts: true } },
 } satisfies Prisma.AbandonedCheckoutInclude;
 
-function toCallLogEntry(c: CheckoutWithLatestAttempt): CallLogEntry {
+/** Dashboard poll: status fields only. The sidebar loads the rest when a row is opened. */
+const CALL_LOG_LIST_SELECT = {
+  id: true,
+  checkoutToken: true,
+  userContext: true,
+  customerPhone: true,
+  customerEmail: true,
+  cartValue: true,
+  callStatus: true,
+  callScheduled: true,
+  storeDomain: true,
+  isRepeatCustomer: true,
+  createdAt: true,
+  updatedAt: true,
+  callAttempts: {
+    orderBy: { startedAt: "desc" as const },
+    take: 1,
+    select: {
+      id: true,
+      failureReason: true,
+      failureStage: true,
+      durationSec: true,
+      trigger: true,
+      startedAt: true,
+    },
+  },
+  _count: { select: { callAttempts: true } },
+} satisfies Prisma.AbandonedCheckoutSelect;
+
+const CALL_LOG_DETAIL_SELECT = {
+  id: true,
+  checkoutToken: true,
+  userContext: true,
+  customerPhone: true,
+  customerEmail: true,
+  cartValue: true,
+  callStatus: true,
+  callScheduled: true,
+  aiSummary: true,
+  lastError: true,
+  sessionId: true,
+  storeDomain: true,
+  checkoutUrl: true,
+  recoveryUrl: true,
+  draftOrderId: true,
+  draftOrderName: true,
+  isRepeatCustomer: true,
+  repeatCustomerOrderCount: true,
+  repeatCustomerLastOrderAt: true,
+  createdAt: true,
+  updatedAt: true,
+  callAttempts: {
+    orderBy: { startedAt: "desc" as const },
+    take: 1,
+    select: {
+      id: true,
+      transcript: true,
+      toolCallsJson: true,
+      failureReason: true,
+      failureStage: true,
+      durationSec: true,
+      trigger: true,
+      startedAt: true,
+    },
+  },
+  _count: { select: { callAttempts: true } },
+} satisfies Prisma.AbandonedCheckoutSelect;
+
+type CallLogAttemptSource = {
+  id: string;
+  failureReason: string | null;
+  failureStage: string | null;
+  durationSec: number | null;
+  trigger: string;
+  startedAt: Date;
+  transcript?: string | null;
+  toolCallsJson?: unknown;
+};
+
+function toCallLogEntry(
+  c: {
+    id: string;
+    checkoutToken: string;
+    userContext: string;
+    customerPhone: string;
+    customerEmail: string | null;
+    cartValue: number;
+    callStatus: CallStatus;
+    callScheduled: boolean;
+    storeDomain: string;
+    isRepeatCustomer: boolean | null;
+    createdAt: Date;
+    updatedAt: Date;
+    sessionId?: string | null;
+    aiSummary?: string | null;
+    lastError?: string | null;
+    checkoutUrl?: string;
+    recoveryUrl?: string;
+    draftOrderId?: string;
+    draftOrderName?: string;
+    repeatCustomerOrderCount?: number | null;
+    repeatCustomerLastOrderAt?: Date | null;
+    callAttempts: CallLogAttemptSource[];
+    _count: { callAttempts: number };
+  }
+): CallLogEntry {
   return {
     id: c.id,
     checkoutToken: c.checkoutToken,
@@ -368,16 +473,16 @@ function toCallLogEntry(c: CheckoutWithLatestAttempt): CallLogEntry {
     cartValue: c.cartValue,
     callStatus: c.callStatus,
     callScheduled: c.callScheduled,
-    aiSummary: c.aiSummary,
-    lastError: c.lastError,
-    sessionId: c.sessionId,
+    aiSummary: c.aiSummary ?? null,
+    lastError: c.lastError ?? null,
+    sessionId: c.sessionId ?? null,
     storeDomain: c.storeDomain,
-    checkoutUrl: c.checkoutUrl,
-    recoveryUrl: c.recoveryUrl,
-    draftOrderId: c.draftOrderId,
-    draftOrderName: c.draftOrderName,
+    checkoutUrl: c.checkoutUrl ?? "",
+    recoveryUrl: c.recoveryUrl ?? "",
+    draftOrderId: c.draftOrderId ?? "",
+    draftOrderName: c.draftOrderName ?? "",
     isRepeatCustomer: c.isRepeatCustomer,
-    repeatCustomerOrderCount: c.repeatCustomerOrderCount,
+    repeatCustomerOrderCount: c.repeatCustomerOrderCount ?? null,
     repeatCustomerLastOrderAt: c.repeatCustomerLastOrderAt
       ? c.repeatCustomerLastOrderAt.toISOString()
       : null,
@@ -387,8 +492,8 @@ function toCallLogEntry(c: CheckoutWithLatestAttempt): CallLogEntry {
     latestAttempt: c.callAttempts[0]
       ? {
           id: c.callAttempts[0].id,
-          transcript: c.callAttempts[0].transcript,
-          toolCallsJson: c.callAttempts[0].toolCallsJson,
+          transcript: c.callAttempts[0].transcript ?? null,
+          toolCallsJson: c.callAttempts[0].toolCallsJson ?? null,
           failureReason: c.callAttempts[0].failureReason,
           failureStage: c.callAttempts[0].failureStage,
           durationSec: c.callAttempts[0].durationSec,
@@ -514,7 +619,7 @@ export async function writeCallFeedbackForCallLog(checkoutId: string): Promise<{
     where: { id: checkoutId },
     include: {
       store: true,
-      callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
+      callAttempts: { orderBy: { startedAt: "asc" } },
     },
   });
 
@@ -531,25 +636,24 @@ export async function writeCallFeedbackForCallLog(checkoutId: string): Promise<{
     };
   }
 
-  const attempt = checkout.callAttempts[0];
+  const attempts = checkout.callAttempts;
+  const attempt = attempts[attempts.length - 1];
   if (!attempt) {
     return { success: false, error: "No call attempt found for this checkout" };
   }
 
   const feedbackContext = buildCallFeedbackContext(checkout);
-  const sessionId = checkout.sessionId || attempt.sessionId;
-  let feedbackText = checkout.aiSummary ?? attempt.transcript;
-  if (sessionId) {
-    const session = await fetchTtaiSessionDetails(sessionId);
-    const extraction = session.success
-      ? formatExtractionFeedback(session.session?.extraction_results)
-      : null;
-    if (extraction) feedbackText = extraction;
-  }
+  const attemptCells = await loadAttemptSheetCells(checkout.id);
+  const latestExtraction = [...attemptCells]
+    .reverse()
+    .find((row) => row.feedbackText)?.feedbackText;
   const result = await writeCallFeedbackForStore(checkout.store, {
     ...feedbackContext,
     callStatus: checkout.callStatus,
-    feedbackText,
+    feedbackText: latestExtraction ?? checkout.aiSummary ?? attempt.transcript,
+    attempts: attemptCells,
+    retryScheduled:
+      checkout.callStatus === CallStatus.PENDING && checkout.callScheduled,
   });
 
   if (!result.ok) {
@@ -576,10 +680,29 @@ export async function getCheckoutLogsForStore(storeDomain: string) {
     },
     orderBy: { updatedAt: "desc" },
     take: 100,
-    include: CALL_LOG_INCLUDE,
+    select: CALL_LOG_LIST_SELECT,
   });
 
   return checkouts.map(toCallLogEntry);
+}
+
+/** One call's sidebar payload. Not included in the dashboard poll. */
+export async function getCheckoutLogDetail(
+  checkoutId: string
+): Promise<CallLogEntry | null> {
+  const checkout = await db.abandonedCheckout.findUnique({
+    where: { id: checkoutId },
+    select: CALL_LOG_DETAIL_SELECT,
+  });
+  if (!checkout) return null;
+
+  try {
+    await assertStoreAccess(checkout.storeDomain);
+  } catch {
+    return null;
+  }
+
+  return toCallLogEntry(checkout);
 }
 
 export async function getAllStoresForAdmin() {

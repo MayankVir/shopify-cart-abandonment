@@ -19,6 +19,7 @@ import {
 import { mergeIncomingUserContext } from "@/lib/user-context";
 import { supersedeRepeatCarts } from "@/lib/repeat-carts";
 import { parseSheetUrl, sheetGvizRangeUrl } from "@/lib/sheet-url";
+import { formatDateLabelInTimeZone } from "@/lib/utils";
 import {
   SHEET_SYNC_DIRECTIONS,
   sheetRowRangeLabel,
@@ -713,50 +714,26 @@ export interface SheetSyncResult {
   syncDirection: SheetSyncDirectionValue;
 }
 
-export async function syncAbandonedCheckoutsFromSheet(
-  store: Pick<
-    Store,
-    | "storeDomain"
-    | "sheetUrl"
-    | "callDelayMinutes"
-    | "sheetSyncDirection"
-    | "autoCallsEnabled"
-    | "ianaTimezone"
-    | "ianaTimezoneOverride"
-    | "callWindowEnabled"
-    | "callWindowStartMinute"
-    | "callWindowEndMinute"
-  >,
-  options: { page?: number; pageSize?: number } = {}
-): Promise<SheetSyncResult> {
-  if (!store.sheetUrl?.trim()) {
-    throw new Error("Sheet URL is not configured for this store");
-  }
+const DATE_FETCH_CHUNK = 30;
 
-  const page = options.page ?? 0;
-  const pageSize = options.pageSize ?? SHEET_SYNC_PAGE_SIZE;
-  const syncDirection =
-    store.sheetSyncDirection === "TOP"
-      ? SHEET_SYNC_DIRECTIONS.TOP
-      : SHEET_SYNC_DIRECTIONS.BOTTOM;
+type SheetSyncStore = Pick<
+  Store,
+  | "storeDomain"
+  | "sheetUrl"
+  | "callDelayMinutes"
+  | "sheetSyncDirection"
+  | "autoCallsEnabled"
+  | "ianaTimezone"
+  | "ianaTimezoneOverride"
+  | "callWindowEnabled"
+  | "callWindowStartMinute"
+  | "callWindowEndMinute"
+>;
 
-  const totalDataRows = await fetchSheetDataRowCount(store.sheetUrl);
-
-  const { csv, includesHeader } = await fetchSheetCsvPage(
-    store.sheetUrl,
-    page,
-    pageSize,
-    { direction: syncDirection, totalDataRows }
-  );
-  const rawRowCount = countSheetDataRows(csv, includesHeader);
-  const rows = parseSheetCsv(csv, {
-    dataOnly: !includesHeader,
-    timeZone: callWindowFromStore(store).timeZone,
-  });
-
-  const totalPages = Math.ceil(Math.max(totalDataRows, 1) / pageSize);
-  const hasMore = page + 1 < totalPages && rawRowCount > 0;
-
+async function persistParsedSheetRows(
+  store: SheetSyncStore,
+  rows: ParsedSheetRow[],
+): Promise<{ synced: number; skipped: number }> {
   let synced = 0;
   let skipped = 0;
   const syncedPhones: string[] = [];
@@ -866,6 +843,193 @@ export async function syncAbandonedCheckoutsFromSheet(
       );
     }
   }
+
+  return { synced, skipped };
+}
+
+function columnCells(csv: string): string[] {
+  const text = csv.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = text.split("\n");
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+    lines.pop();
+  }
+  return lines.map((line) => {
+    let cell = line.trim();
+    if (cell.startsWith('"') && cell.endsWith('"')) {
+      cell = cell.slice(1, -1).replace(/""/g, '"');
+    }
+    return cell;
+  });
+}
+
+async function fetchSheetColumnValues(sheetUrl: string, column: string): Promise<string[]> {
+  const parsed = parseSheetUrl(sheetUrl.trim());
+  if (!parsed) {
+    throw new Error(
+      "Invalid Google Sheets URL — paste a link like https://docs.google.com/spreadsheets/d/…/edit"
+    );
+  }
+  const url = sheetGvizRangeUrl(
+    parsed.spreadsheetId,
+    parsed.gid,
+    `${column}2:${column}20000`,
+  );
+  const result = await tryFetchCsv(url);
+  if (!result.ok) {
+    throw new Error(
+      `Could not read sheet column ${column}. Make sure the sheet is shared as "Anyone with the link can view" or published to the web.`
+    );
+  }
+  return columnCells(result.text);
+}
+
+function contiguousRanges(rows: number[]): Array<[number, number]> {
+  if (rows.length === 0) return [];
+  const sorted = [...rows].sort((a, b) => a - b);
+  const ranges: Array<[number, number]> = [];
+  let start = sorted[0];
+  let end = sorted[0];
+  for (let index = 1; index < sorted.length; index++) {
+    const row = sorted[index];
+    if (row === end + 1) {
+      end = row;
+      continue;
+    }
+    ranges.push([start, end]);
+    start = row;
+    end = row;
+  }
+  ranges.push([start, end]);
+  return ranges;
+}
+
+async function fetchSheetRowRange(
+  sheetUrl: string,
+  start: number,
+  end: number,
+  timeZone: string,
+): Promise<ParsedSheetRow[]> {
+  const parsed = parseSheetUrl(sheetUrl.trim());
+  if (!parsed) {
+    throw new Error(
+      "Invalid Google Sheets URL — paste a link like https://docs.google.com/spreadsheets/d/…/edit"
+    );
+  }
+  const lastCol = columnIndexToLetter(SHEET_HEADERS.length);
+  const range = `A${start}:${lastCol}${end}`;
+  const url = sheetGvizRangeUrl(parsed.spreadsheetId, parsed.gid, range);
+  const result = await tryFetchCsv(url);
+  if (!result.ok) {
+    throw new Error(
+      `Could not fetch sheet range ${range}. Make sure the sheet is shared as "Anyone with the link can view" or published to the web.`
+    );
+  }
+  return parseSheetCsv(result.text, { dataOnly: true, timeZone });
+}
+
+export async function syncAbandonedCheckoutsForDate(
+  store: SheetSyncStore,
+  dateLabel: string,
+): Promise<{ synced: number; skipped: number; matched: number }> {
+  if (!store.sheetUrl?.trim()) {
+    throw new Error("Sheet URL is not configured for this store");
+  }
+
+  const timeZone = callWindowFromStore(store).timeZone;
+  const createdAtColumn = columnIndexToLetter(
+    SHEET_HEADERS.indexOf("created_at") + 1,
+  );
+  const [timestamps, createdAts] = await Promise.all([
+    fetchSheetColumnValues(store.sheetUrl, "A"),
+    fetchSheetColumnValues(store.sheetUrl, createdAtColumn),
+  ]);
+  const length = Math.max(timestamps.length, createdAts.length);
+  const matchingRows: number[] = [];
+
+  for (let index = 0; index < length; index++) {
+    const raw = timestamps[index]?.trim() || createdAts[index]?.trim() || "";
+    if (!raw) continue;
+    const when = parseDate(raw, timeZone);
+    if (!when) continue;
+    if (formatDateLabelInTimeZone(when, timeZone) !== dateLabel) continue;
+    matchingRows.push(index + 2);
+  }
+
+  const matchedRows: ParsedSheetRow[] = [];
+  for (const [start, end] of contiguousRanges(matchingRows)) {
+    for (let cursor = start; cursor <= end; cursor += DATE_FETCH_CHUNK) {
+      const chunkEnd = Math.min(end, cursor + DATE_FETCH_CHUNK - 1);
+      const rows = await fetchSheetRowRange(
+        store.sheetUrl,
+        cursor,
+        chunkEnd,
+        timeZone,
+      );
+      matchedRows.push(
+        ...rows.filter((row) => {
+          const when = row.abandonedAt ?? row.shopifyCreatedAt;
+          return Boolean(when && formatDateLabelInTimeZone(when, timeZone) === dateLabel);
+        }),
+      );
+    }
+  }
+
+  const { synced, skipped } = await persistParsedSheetRows(store, matchedRows);
+  if (synced > 0) {
+    await db.store.update({
+      where: { storeDomain: store.storeDomain },
+      data: { lastSheetSyncAt: new Date() },
+    });
+  }
+
+  return { synced, skipped, matched: matchingRows.length };
+}
+
+export async function syncAbandonedCheckoutsFromSheet(
+  store: Pick<
+    Store,
+    | "storeDomain"
+    | "sheetUrl"
+    | "callDelayMinutes"
+    | "sheetSyncDirection"
+    | "autoCallsEnabled"
+    | "ianaTimezone"
+    | "ianaTimezoneOverride"
+    | "callWindowEnabled"
+    | "callWindowStartMinute"
+    | "callWindowEndMinute"
+  >,
+  options: { page?: number; pageSize?: number } = {}
+): Promise<SheetSyncResult> {
+  if (!store.sheetUrl?.trim()) {
+    throw new Error("Sheet URL is not configured for this store");
+  }
+
+  const page = options.page ?? 0;
+  const pageSize = options.pageSize ?? SHEET_SYNC_PAGE_SIZE;
+  const syncDirection =
+    store.sheetSyncDirection === "TOP"
+      ? SHEET_SYNC_DIRECTIONS.TOP
+      : SHEET_SYNC_DIRECTIONS.BOTTOM;
+
+  const totalDataRows = await fetchSheetDataRowCount(store.sheetUrl);
+
+  const { csv, includesHeader } = await fetchSheetCsvPage(
+    store.sheetUrl,
+    page,
+    pageSize,
+    { direction: syncDirection, totalDataRows }
+  );
+  const rawRowCount = countSheetDataRows(csv, includesHeader);
+  const rows = parseSheetCsv(csv, {
+    dataOnly: !includesHeader,
+    timeZone: callWindowFromStore(store).timeZone,
+  });
+
+  const totalPages = Math.ceil(Math.max(totalDataRows, 1) / pageSize);
+  const hasMore = page + 1 < totalPages && rawRowCount > 0;
+
+  const { synced, skipped } = await persistParsedSheetRows(store, rows);
 
   await db.store.update({
     where: { storeDomain: store.storeDomain },

@@ -14,6 +14,7 @@ import {
 import {
   getCallAttemptsForCheckout,
   getPipelineEventsForCheckout,
+  setCheckoutCallStatusAction,
   updateCheckoutCustomerNameAction,
   type AbandonedCheckoutRow,
   type CallAttemptRow,
@@ -28,6 +29,7 @@ import {
   displayCheckoutStatus,
   formatCallStatus,
   isActiveCall,
+  MANUAL_CHECKOUT_STATUSES,
   STATUS_VARIANT,
 } from "@/lib/call-status";
 import {
@@ -71,6 +73,20 @@ function DetailField({
       <div className="text-sm leading-relaxed text-foreground">{children}</div>
     </div>
   );
+}
+
+function lastCallLabel(checkout: AbandonedCheckoutRow): string {
+  if (!checkout.latestAttempt) return "Not attempted";
+  const when = formatDateTimeLabel(checkout.latestAttempt.startedAt);
+  const retryNumber = checkout.latestAttempt.retryNumber;
+  if (retryNumber > 0) {
+    return `${when} · retry ${retryNumber} · ${checkout.attemptCount} attempts`;
+  }
+  if (checkout.attemptCount > 1) {
+    return `${when} · ${checkout.attemptCount} attempts`;
+  }
+  if (checkout.attemptCount === 1) return `${when} · 1 attempt`;
+  return when;
 }
 
 function PipelineEventList({ events }: { events: PipelineEventRow[] }) {
@@ -317,6 +333,7 @@ export function CheckoutDetailDrawer({
   const [name, setName] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [isSavingName, startSaveName] = useTransition();
+  const [isUpdatingStatus, startStatusUpdate] = useTransition();
 
   useEffect(() => {
     if (!open || !checkout) return;
@@ -347,6 +364,25 @@ export function CheckoutDetailDrawer({
       active = false;
     };
   }, [open, checkout?.id, checkout?.callStatus]);
+
+  function handleStatusChange(nextStatus: CallStatus) {
+    if (!checkout || nextStatus === checkout.callStatus || isUpdatingStatus) return;
+    const option = MANUAL_CHECKOUT_STATUSES.find((item) => item.status === nextStatus);
+    if (!option) return;
+    startStatusUpdate(async () => {
+      const result = await setCheckoutCallStatusAction(checkout.id, nextStatus);
+      if (!result.success) {
+        toast.error(result.error ?? "Failed to update status");
+        return;
+      }
+      toast.success(
+        option.skipsSchedule
+          ? `Marked ${option.label.toLowerCase()}. The schedule was cleared.`
+          : "Marked pending. Schedule it again if it should be called.",
+      );
+      onSaved();
+    });
+  }
 
   function handleSaveName(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -418,15 +454,44 @@ export function CheckoutDetailDrawer({
                 </p>
               </section>
             ) : null}
-            <section className="space-y-4">
+            <section className="space-y-3">
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-sm font-semibold">Customer</h3>
+                <h3 className="text-sm font-semibold">Status</h3>
                 <StatusBadge
                   label={status.label}
                   variant={status.variant}
                   detail={status.detail}
                 />
               </div>
+              <div className="flex flex-wrap gap-2">
+                {MANUAL_CHECKOUT_STATUSES.map((option) => (
+                  <Button
+                    key={option.status}
+                    type="button"
+                    size="sm"
+                    variant={
+                      checkout.callStatus === option.status ? "secondary" : "outline"
+                    }
+                    disabled={
+                      isUpdatingStatus ||
+                      isActiveCall(checkout.callStatus) ||
+                      checkout.callStatus === option.status
+                    }
+                    onClick={() => handleStatusChange(option.status)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {isActiveCall(checkout.callStatus)
+                  ? "Stop the live call before changing its status."
+                  : "Completed, duplicate cart, and order placed already clear the schedule so this checkout is not called."}
+              </p>
+            </section>
+
+            <section className="space-y-4">
+              <h3 className="text-sm font-semibold">Customer</h3>
 
               <form onSubmit={handleSaveName} className="space-y-2">
                 <Label htmlFor="checkout-customer-name">Name</Label>
@@ -530,11 +595,21 @@ export function CheckoutDetailDrawer({
 
             <section className="space-y-3 border-t border-border pt-6">
               <h3 className="text-sm font-semibold">Schedule</h3>
-              <DetailField label="Call time">
-                {checkout.scheduledCallAt
-                  ? formatDateTimeLabel(checkout.scheduledCallAt)
-                  : "Not set"}
-              </DetailField>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <DetailField label="Abandoned">
+                  {checkout.shopifyCreatedAt
+                    ? formatDateTimeLabel(checkout.shopifyCreatedAt)
+                    : "—"}
+                </DetailField>
+                <DetailField label="Last call">
+                  {lastCallLabel(checkout)}
+                </DetailField>
+                <DetailField label="Next call">
+                  {checkout.scheduledCallAt
+                    ? formatDateTimeLabel(checkout.scheduledCallAt)
+                    : "Not set"}
+                </DetailField>
+              </div>
               <div className="flex flex-wrap gap-2">
                 {canEditScheduleTime ? (
                   <Button size="sm" variant="outline" onClick={onEditSchedule}>

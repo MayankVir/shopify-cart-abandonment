@@ -12,7 +12,12 @@ import type { LineItemRecord } from "@/lib/line-items";
 import { rowToRecord } from "@/lib/sheet-sync";
 import { parseSheetUrl } from "@/lib/sheet-url";
 import { parseShippingAddressFromUserContext } from "@/lib/shipping-address";
-import { fetchTtaiSessionDetails, formatExtractionFeedback } from "@/lib/ttai";
+import {
+  extractionCallOutcome,
+  fetchTtaiSessionDetails,
+  formatExtractionFeedback,
+  ttaiSessionAnalysisUrl,
+} from "@/lib/ttai";
 
 export const DEFAULT_CALL_FEEDBACK_KEY_COLUMN = "request_id";
 
@@ -36,7 +41,57 @@ export const CALL_FEEDBACK_REQUIRED_COLUMNS = [
 export const CALL_FEEDBACK_OUTPUT_COLUMNS = {
   status: "ttai_call_status",
   feedback: "ttai_call_feedback",
+  retryCount: "ttai_retry_count",
 } as const;
+
+/** One column per dial: `ttai_retry_1`, `ttai_retry_2`, and so on. */
+export function attemptColumnName(attemptNumber: number): string {
+  return `ttai_retry_${attemptNumber}`;
+}
+
+const DID_NOT_CONNECT = new Set<CallStatus>([
+  CallStatus.NO_ANSWER,
+  CallStatus.BUSY,
+  CallStatus.VOICEMAIL,
+  CallStatus.INVALID_NUMBER,
+  CallStatus.DISPATCH_FAILED,
+]);
+
+export interface CallAttemptSheetCells {
+  status: CallStatus;
+  sessionId?: string | null;
+  /** Extraction text for this dial, same shape as `ttai_call_feedback`. */
+  feedbackText?: string | null;
+  /** `call_outcome` from this dial's extraction, when present. */
+  outcomeLabel?: string | null;
+}
+
+export function attemptStatusLabel(attempt: CallAttemptSheetCells): string {
+  const outcome = attempt.outcomeLabel?.trim();
+  if (outcome) return outcome;
+  if (DID_NOT_CONNECT.has(attempt.status)) return "did not connect";
+  return formatCallStatus(attempt.status);
+}
+
+/** Status, extraction, and the session link, stacked in one cell. */
+export function attemptSheetCells(
+  attempts: CallAttemptSheetCells[],
+): Array<{ column: string; value: string }> {
+  return attempts.map((attempt, index) => {
+    const sessionUrl = attempt.sessionId
+      ? ttaiSessionAnalysisUrl(attempt.sessionId)
+      : null;
+    const parts = [
+      attemptStatusLabel(attempt),
+      attempt.feedbackText?.trim() || null,
+      sessionUrl,
+    ].filter((part): part is string => Boolean(part));
+    return {
+      column: attemptColumnName(index + 1),
+      value: parts.join("\n\n"),
+    };
+  });
+}
 
 function normalizeHeader(value: string): string {
   return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
@@ -106,6 +161,10 @@ export interface CallFeedbackWriteInput extends CallFeedbackContext {
   keyColumn: string;
   callStatus: CallStatus;
   feedbackText?: string | null;
+  /** Chronological attempts. Each one is written into its own cell. */
+  attempts?: CallAttemptSheetCells[];
+  /** The latest attempt failed and another dial was queued. */
+  retryScheduled?: boolean;
 }
 
 export interface CallFeedbackWriteResult {
@@ -172,6 +231,7 @@ function buildBootstrapHeaders(keyColumn: string): string[] {
     ...CALL_FEEDBACK_REQUIRED_COLUMNS,
     CALL_FEEDBACK_OUTPUT_COLUMNS.status,
     CALL_FEEDBACK_OUTPUT_COLUMNS.feedback,
+    CALL_FEEDBACK_OUTPUT_COLUMNS.retryCount,
   ];
 }
 
@@ -179,7 +239,8 @@ async function ensureFeedbackColumns(
   spreadsheetId: string,
   sheetTitle: string,
   headers: string[],
-  keyColumn: string
+  keyColumn: string,
+  extraColumns: string[] = [],
 ): Promise<{
   headerIndex: Record<string, number>;
 }> {
@@ -203,7 +264,10 @@ async function ensureFeedbackColumns(
     }
   }
 
-  for (const outputColumn of Object.values(CALL_FEEDBACK_OUTPUT_COLUMNS)) {
+  for (const outputColumn of [
+    ...Object.values(CALL_FEEDBACK_OUTPUT_COLUMNS),
+    ...extraColumns,
+  ]) {
     if (!normalized.includes(outputColumn)) {
       const index = headers.length;
       writes.push({ a1: `${columnIndexToA1(index)}1`, value: outputColumn });
@@ -254,11 +318,21 @@ export async function writeCallFeedbackToSheet(
     const { sheetTitle, rows } = await readSheetHeadersAndTitle(input.targetSheetUrl);
     const headers = (rows[0] ?? []).map((cell) => cell.trim());
 
+    const attemptCells = attemptSheetCells(input.attempts ?? []);
+    const retryCount =
+      input.attempts == null
+        ? ""
+        : String(
+            Math.max(0, input.attempts.length - 1) +
+              (input.retryScheduled ? 1 : 0),
+          );
+
     const { headerIndex } = await ensureFeedbackColumns(
       parsed.spreadsheetId,
       sheetTitle,
       headers,
-      keyColumn
+      keyColumn,
+      attemptCells.map((cell) => cell.column),
     );
 
     const keyIndex = headerIndex[keyColumn];
@@ -277,6 +351,13 @@ export async function writeCallFeedbackToSheet(
       }
     }
 
+    const attemptWrites = attemptCells.flatMap((cell) => {
+      const index = headerIndex[cell.column];
+      if (index == null || !cell.value) return [];
+      return [{ index, value: cell.value }];
+    });
+    const retryCountIndex = headerIndex[CALL_FEEDBACK_OUTPUT_COLUMNS.retryCount];
+
     if (matchedRow > 0) {
       await writeSheetCells(parsed.spreadsheetId, sheetTitle, [
         { a1: `${columnIndexToA1(statusIndex)}${matchedRow}`, value: statusLabel },
@@ -284,6 +365,18 @@ export async function writeCallFeedbackToSheet(
           a1: `${columnIndexToA1(feedbackIndex)}${matchedRow}`,
           value: feedbackText,
         },
+        ...(retryCount
+          ? [
+              {
+                a1: `${columnIndexToA1(retryCountIndex)}${matchedRow}`,
+                value: retryCount,
+              },
+            ]
+          : []),
+        ...attemptWrites.map((cell) => ({
+          a1: `${columnIndexToA1(cell.index)}${matchedRow}`,
+          value: cell.value,
+        })),
       ]);
       return { ok: true, wroteRow: "updated" };
     }
@@ -302,6 +395,10 @@ export async function writeCallFeedbackToSheet(
       variant_ids: input.variantIds ?? "",
       [CALL_FEEDBACK_OUTPUT_COLUMNS.status]: statusLabel,
       [CALL_FEEDBACK_OUTPUT_COLUMNS.feedback]: feedbackText,
+      ...(retryCount
+        ? { [CALL_FEEDBACK_OUTPUT_COLUMNS.retryCount]: retryCount }
+        : {}),
+      ...Object.fromEntries(attemptCells.map((cell) => [cell.column, cell.value])),
     };
 
     const writes: Array<{ a1: string; value: string }> = [];
@@ -355,6 +452,67 @@ export async function writeCallFeedbackForStore(
   return writeCallFeedbackToSheet({ ...input, targetSheetUrl, keyColumn });
 }
 
+/** Loads each dial in order: status, extraction, and the session link. */
+export async function loadAttemptSheetCells(
+  checkoutId: string,
+): Promise<CallAttemptSheetCells[]> {
+  const attempts = await db.callAttempt.findMany({
+    where: { abandonedCheckoutId: checkoutId },
+    orderBy: { startedAt: "asc" },
+    select: { status: true, sessionId: true },
+  });
+  const cells: CallAttemptSheetCells[] = [];
+  for (const attempt of attempts) {
+    let feedbackText: string | null = null;
+    let outcomeLabel: string | null = null;
+    if (attempt.sessionId) {
+      const session = await fetchTtaiSessionDetails(attempt.sessionId);
+      if (session.success) {
+        feedbackText = formatExtractionFeedback(session.session?.extraction_results);
+        outcomeLabel = extractionCallOutcome(session.session?.extraction_results);
+      }
+    }
+    cells.push({
+      status: attempt.status,
+      sessionId: attempt.sessionId,
+      feedbackText,
+      outcomeLabel,
+    });
+  }
+  return cells;
+}
+
+/** Writes the latest status plus one cell per dial. */
+export async function writeCheckoutCallFeedback(
+  store: Pick<
+    Store,
+    "callFeedbackSheetEnabled" | "callFeedbackSheetUrl" | "sheetUrl" | "callFeedbackKeyColumn"
+  >,
+  checkout: {
+    id: string;
+    checkoutToken: string;
+    customerPhone: string;
+    customerEmail: string | null;
+    userContext: string;
+    lineItemsJson: Prisma.JsonValue;
+    aiSummary?: string | null;
+  },
+  options: {
+    callStatus: CallStatus;
+    feedbackText?: string | null;
+    retryScheduled?: boolean;
+  },
+): Promise<CallFeedbackWriteResult> {
+  const attempts = await loadAttemptSheetCells(checkout.id);
+  return writeCallFeedbackIfEnabled(store, {
+    ...buildCallFeedbackContext(checkout),
+    callStatus: options.callStatus,
+    feedbackText: options.feedbackText ?? checkout.aiSummary,
+    attempts,
+    retryScheduled: Boolean(options.retryScheduled),
+  });
+}
+
 export interface ExtractionFeedbackRowResult {
   sheetRow: number;
   requestId: string;
@@ -364,9 +522,8 @@ export interface ExtractionFeedbackRowResult {
 }
 
 /**
- * Walks the draft sheet and overwrites `ttai_call_feedback` with the call's
- * extraction fields. Rows that already have text in that cell are replaced.
- * Rows with no session extraction are left unchanged.
+ * Walks the draft sheet and writes each dial into its own cell (status,
+ * extraction, and session link). Also refreshes `ttai_call_feedback`.
  */
 export async function writeExtractionFeedbackForSheet(options: {
   storeDomain: string;
@@ -374,6 +531,8 @@ export async function writeExtractionFeedbackForSheet(options: {
   offset: number;
   limit: number;
   onlySheetRows?: number[];
+  /** Google Sheet row to resume from, inclusive. Row 1 is the header. */
+  startSheetRow?: number;
 }): Promise<{
   results: ExtractionFeedbackRowResult[];
   nextOffset: number;
@@ -403,6 +562,7 @@ export async function writeExtractionFeedbackForSheet(options: {
   let feedbackIndex = headers.indexOf(CALL_FEEDBACK_OUTPUT_COLUMNS.feedback);
   if (feedbackIndex < 0) {
     feedbackIndex = rawHeaders.length;
+    rawHeaders.push(CALL_FEEDBACK_OUTPUT_COLUMNS.feedback);
     await writeSheetCells(parsed.spreadsheetId, sheetTitle, [
       {
         a1: `${columnIndexToA1(feedbackIndex)}1`,
@@ -419,9 +579,17 @@ export async function writeExtractionFeedbackForSheet(options: {
     }))
     .filter((row) => Object.values(row.record).some((value) => value.trim()));
 
+  const startSheetRow =
+    options.startSheetRow != null && options.startSheetRow >= 2
+      ? options.startSheetRow
+      : null;
+  const fromStart =
+    startSheetRow == null
+      ? records
+      : records.filter((row) => row.sheetRow >= startSheetRow);
   const scoped = options.onlySheetRows?.length
     ? records.filter((row) => options.onlySheetRows!.includes(row.sheetRow))
-    : records;
+    : fromStart;
   const slice = scoped.slice(options.offset, options.offset + options.limit);
   const results: ExtractionFeedbackRowResult[] = [];
 
@@ -440,15 +608,7 @@ export async function writeExtractionFeedbackForSheet(options: {
 
     const checkout = await db.abandonedCheckout.findUnique({
       where: { checkoutToken: requestId },
-      select: {
-        storeDomain: true,
-        callAttempts: {
-          where: { sessionId: { not: null } },
-          orderBy: { startedAt: "desc" },
-          select: { sessionId: true },
-          take: 3,
-        },
-      },
+      select: { id: true, storeDomain: true },
     });
 
     if (!checkout || checkout.storeDomain !== options.storeDomain) {
@@ -462,56 +622,75 @@ export async function writeExtractionFeedbackForSheet(options: {
       continue;
     }
 
-    const sessionIds = checkout.callAttempts
-      .map((attempt) => attempt.sessionId)
-      .filter((id): id is string => Boolean(id));
-    if (sessionIds.length === 0) {
+    const attemptCells = await loadAttemptSheetCells(checkout.id);
+    if (attemptCells.length === 0) {
       results.push({
         sheetRow,
         requestId,
         status: "skipped",
-        message: "No session yet",
+        message: "No call for this request",
         wroteToSheet: false,
       });
       continue;
     }
 
-    let feedback: string | null = null;
-    let fetchError: string | null = null;
-    for (const sessionId of sessionIds) {
-      const session = await fetchTtaiSessionDetails(sessionId);
-      if (!session.success) {
-        fetchError = session.error ?? "Session details failed";
-        continue;
-      }
-      feedback = formatExtractionFeedback(session.session?.extraction_results);
-      if (feedback) break;
+    const perAttempt = attemptSheetCells(attemptCells);
+    const latestFeedback = [...attemptCells]
+      .reverse()
+      .find((row) => row.feedbackText)?.feedbackText;
+    const normalizedHeaders = rawHeaders.map(normalizeHeader);
+    const headerWrites: Array<{ a1: string; value: string }> = [];
+    for (const column of perAttempt.map((cell) => cell.column)) {
+      if (normalizedHeaders.includes(column)) continue;
+      const index = rawHeaders.length;
+      headerWrites.push({ a1: `${columnIndexToA1(index)}1`, value: column });
+      rawHeaders.push(column);
+      normalizedHeaders.push(column);
+    }
+    if (headerWrites.length) {
+      await writeSheetCells(parsed.spreadsheetId, sheetTitle, headerWrites);
+    }
+    const headerIndex: Record<string, number> = {};
+    normalizedHeaders.forEach((name, index) => {
+      headerIndex[name] = index;
+    });
+    const resolvedFeedbackIndex =
+      headerIndex[CALL_FEEDBACK_OUTPUT_COLUMNS.feedback] ?? feedbackIndex;
+
+    const writes: Array<{ a1: string; value: string }> = [];
+    if (latestFeedback) {
+      writes.push({
+        a1: `${columnIndexToA1(resolvedFeedbackIndex)}${sheetRow}`,
+        value: latestFeedback,
+      });
+    }
+    for (const cell of perAttempt) {
+      const index = headerIndex[cell.column];
+      if (index == null || !cell.value) continue;
+      writes.push({
+        a1: `${columnIndexToA1(index)}${sheetRow}`,
+        value: cell.value,
+      });
     }
 
-    if (!feedback) {
+    if (writes.length === 0) {
       results.push({
         sheetRow,
         requestId,
-        status: fetchError ? "failed" : "skipped",
-        message: fetchError ?? "No extraction on this call",
+        status: "skipped",
+        message: "No extraction on this call",
         wroteToSheet: false,
       });
       continue;
     }
 
-    await writeSheetCells(parsed.spreadsheetId, sheetTitle, [
-      { a1: `${columnIndexToA1(feedbackIndex)}${sheetRow}`, value: feedback },
-    ]);
-    const outcome = feedback
-      .split("\n")
-      .find((line) => line.startsWith("call_outcome:"))
-      ?.slice("call_outcome:".length)
-      .trim();
+    await writeSheetCells(parsed.spreadsheetId, sheetTitle, writes);
+    const outcome = attemptCells.map((row) => row.outcomeLabel).find(Boolean);
     results.push({
       sheetRow,
       requestId,
       status: "written",
-      message: outcome ? `Replaced feedback · ${outcome}` : "Replaced feedback",
+      message: outcome ? `Updated retries · ${outcome}` : "Updated retries",
       wroteToSheet: true,
     });
   }

@@ -473,7 +473,52 @@ export async function fetchTtaiUnifiedAnalytics(
     };
   }
 
-  return { success: true, data: parsed };
+  return { success: true, data: normalizeTtaiAnalytics(parsed) };
+}
+
+/** The analytics payload has used more than one field name for the same numbers. */
+function normalizeTtaiAnalytics(data: TtaiUnifiedAnalytics): TtaiUnifiedAnalytics {
+  const scenarios = (data.scenarios ?? []).map((raw) => {
+    const row = raw as TtaiScenarioAnalytics & {
+      id?: string;
+      name?: string;
+      session_count?: number;
+      total_duration_seconds?: number;
+    };
+    const totalSessions = row.total_sessions ?? row.session_count ?? 0;
+    const avgDurationMinutes =
+      row.avg_duration_minutes ??
+      (totalSessions > 0 && row.total_duration_seconds != null
+        ? row.total_duration_seconds / 60 / totalSessions
+        : 0);
+    return {
+      scenario_id: row.scenario_id || row.id || "",
+      scenario_name: row.scenario_name || row.name || "",
+      total_sessions: totalSessions,
+      avg_duration_minutes: avgDurationMinutes,
+      avg_score: row.avg_score,
+    };
+  });
+
+  const series = (data.org_dashboard?.time_series ?? []).map((raw) => {
+    const point = raw as TtaiAnalyticsTimeSeriesPoint & {
+      session_count?: number;
+      total_minutes?: number;
+    };
+    return {
+      date: point.date,
+      sessions: point.sessions ?? point.session_count ?? 0,
+      minutes: point.minutes ?? point.total_minutes ?? 0,
+    };
+  });
+
+  return {
+    ...data,
+    scenarios,
+    org_dashboard: data.org_dashboard
+      ? { ...data.org_dashboard, time_series: series }
+      : undefined,
+  };
 }
 
 export function scenarioTotalMinutes(scenario: TtaiScenarioAnalytics): number {
@@ -513,6 +558,27 @@ export function formatExtractionFeedback(extraction: unknown): string | null {
   const hasValue = fields.some((key) => extractionValue(record[key]) !== "");
   if (!hasValue) return null;
   return fields.map((key) => `${key}: ${extractionValue(record[key])}`).join("\n");
+}
+
+/** `call_outcome` from a session extraction, when the agent recorded one. */
+export function extractionCallOutcome(extraction: unknown): string | null {
+  if (!extraction || typeof extraction !== "object" || Array.isArray(extraction)) {
+    return null;
+  }
+  const value = extractionValue(
+    (extraction as Record<string, unknown>).call_outcome,
+  );
+  return value || null;
+}
+
+/** Session analysis page. Last path segment is the Tough Tongue session id. */
+export function ttaiSessionAnalysisUrl(sessionId: string): string | null {
+  const id = sessionId.trim();
+  if (!id) return null;
+  const base = (
+    process.env.TTAI_APP_BASE_URL || "https://jhaji.app.toughtongueai.com"
+  ).replace(/\/$/, "");
+  return `${base}/analysis/${id}/`;
 }
 
 export function buildSessionSummary(session: TtaiSessionDetails): string | undefined {

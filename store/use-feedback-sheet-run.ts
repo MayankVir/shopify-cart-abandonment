@@ -20,6 +20,7 @@ interface FeedbackSheetRunActions {
     storeDomain: string;
     sheetUrl: string;
     onlySheetRows?: number[];
+    startSheetRow?: number;
     replaceLog: boolean;
     totalHint: number;
   }) => Promise<void>;
@@ -77,6 +78,7 @@ export const useFeedbackSheetRun = create<
           offset,
           limit: 1,
           onlySheetRows: options.onlySheetRows,
+          startSheetRow: options.startSheetRow,
         });
         if (token !== runToken) return;
 

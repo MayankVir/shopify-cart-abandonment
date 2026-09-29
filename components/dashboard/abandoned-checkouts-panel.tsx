@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useState, useTransition } from "react
 import { toast } from "sonner";
 import {
   CalendarClock,
+  ChevronRight,
   Loader2,
   MoreHorizontal,
   Phone,
@@ -12,11 +13,13 @@ import {
   Settings2,
 } from "lucide-react";
 import {
+  fetchAbandonedCheckoutsForDate,
   getAbandonedCheckoutsForStore,
   getStoreRecoverySettings,
   bulkScheduleCheckoutsAction,
   bulkStopRecoveryCallAction,
   initiateRecoveryCall,
+  setCheckoutsCallStatusAction,
   stopRecoveryCallAction,
   syncAbandonedCheckouts,
   updateStoreAutoCallsEnabled,
@@ -30,12 +33,20 @@ import {
   canScheduleCallback,
   canSelectCheckout,
   canStopCall,
+  MANUAL_CHECKOUT_STATUSES,
   type AutoCallEnrollmentSelection,
   displayCheckoutStatus,
   isActiveCall,
 } from "@/lib/call-status";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -75,6 +86,7 @@ import {
   formatDateLabel,
   formatDateTimeLabel,
   formatPhoneNumber,
+  formatTimeLabel,
 } from "@/lib/utils";
 import { CallStatus } from "@prisma/client";
 
@@ -91,6 +103,59 @@ function checkoutSortTime(checkout: AbandonedCheckoutRow): number {
   return checkout.shopifyCreatedAt
     ? new Date(checkout.shopifyCreatedAt).getTime()
     : 0;
+}
+
+function TimestampCell({
+  value,
+  detail,
+}: {
+  value: string | null;
+  detail?: string | null;
+}) {
+  if (!value) {
+    return <span className="text-sm text-muted-foreground">—</span>;
+  }
+
+  return (
+    <div className="min-w-0">
+      <p className="truncate text-sm tabular-nums leading-5">
+        {formatDateLabel(value)}
+      </p>
+      <p className="truncate text-xs leading-4 text-muted-foreground">
+        {formatTimeLabel(value)}
+        {detail ? ` · ${detail}` : ""}
+      </p>
+    </div>
+  );
+}
+
+/** `YYYY-MM-DD` in the same local calendar the Last call cell uses. */
+function lastCallDateValue(checkout: AbandonedCheckoutRow): string | null {
+  const startedAt = checkout.latestAttempt?.startedAt;
+  if (!startedAt) return null;
+  const date = new Date(startedAt);
+  if (Number.isNaN(date.getTime())) return null;
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function matchesLastCallDate(
+  checkout: AbandonedCheckoutRow,
+  date: string,
+): boolean {
+  if (!date) return true;
+  return lastCallDateValue(checkout) === date;
+}
+
+function lastCallDetail(checkout: AbandonedCheckoutRow): string | null {
+  if (!checkout.latestAttempt || checkout.attemptCount <= 0) return null;
+  const retryNumber = checkout.latestAttempt.retryNumber;
+  if (retryNumber > 0) {
+    return `Retry ${retryNumber} · ${checkout.attemptCount} attempts`;
+  }
+  if (checkout.attemptCount === 1) return "1 attempt";
+  return `${checkout.attemptCount} attempts`;
 }
 
 function ScheduleCell({
@@ -227,10 +292,14 @@ function CheckoutRow({
           </p>
         </div>
       </TableCell>
-      <TableCell className="px-3 py-2 text-sm tabular-nums text-muted-foreground">
-        {checkout.shopifyCreatedAt
-          ? formatDateTimeLabel(checkout.shopifyCreatedAt)
-          : "—"}
+      <TableCell className="px-3 py-2">
+        <TimestampCell value={checkout.shopifyCreatedAt} />
+      </TableCell>
+      <TableCell className="px-3 py-2">
+        <TimestampCell
+          value={checkout.latestAttempt?.startedAt ?? null}
+          detail={lastCallDetail(checkout)}
+        />
       </TableCell>
       <TableCell className="px-3 py-2 text-sm font-medium tabular-nums">
         {formatCurrency(checkout.cartValue)}
@@ -302,6 +371,11 @@ export function AbandonedCheckoutsPanel() {
   const [shownCompletedDates, setShownCompletedDates] = useState<Set<string>>(
     () => new Set(),
   );
+  const [collapsedDates, setCollapsedDates] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [fetchingDate, setFetchingDate] = useState<string | null>(null);
+  const [lastCallDate, setLastCallDate] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [isSyncing, startSync] = useTransition();
   const [showSettings, setShowSettings] = useState(false);
@@ -309,6 +383,7 @@ export function AbandonedCheckoutsPanel() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [isBulkStopping, startBulkStop] = useTransition();
   const [isBulkScheduling, startBulkSchedule] = useTransition();
+  const [isBulkStatus, startBulkStatus] = useTransition();
   const [showBulkSchedule, setShowBulkSchedule] = useState(false);
   const [bulkScheduleValue, setBulkScheduleValue] = useState("");
   const [totalCount, setTotalCount] = useState(0);
@@ -334,6 +409,15 @@ export function AbandonedCheckoutsPanel() {
   const [isDetailCalling, startDetailCall] = useTransition();
   const [isDetailStopping, startDetailStop] = useTransition();
 
+  const visibleCheckouts = lastCallDate
+    ? checkouts.filter((checkout) => matchesLastCallDate(checkout, lastCallDate))
+    : checkouts;
+  const visibleCompletedCheckouts = lastCallDate
+    ? completedCheckouts.filter((checkout) =>
+        matchesLastCallDate(checkout, lastCallDate),
+      )
+    : completedCheckouts;
+
   const dateGroups = (() => {
     const groups = new Map<
       string,
@@ -353,12 +437,12 @@ export function AbandonedCheckoutsPanel() {
       return existing;
     }
 
-    for (const checkout of checkouts) {
+    for (const checkout of visibleCheckouts) {
       ensureGroup(checkout).rows.push(checkout);
     }
-    for (const checkout of completedCheckouts) {
+    for (const checkout of visibleCompletedCheckouts) {
       const group = ensureGroup(checkout);
-      if (shownCompletedDates.has(group.label)) {
+      if (lastCallDate || shownCompletedDates.has(group.label)) {
         group.rows.push(checkout);
       }
     }
@@ -372,7 +456,7 @@ export function AbandonedCheckoutsPanel() {
       }))
       .sort((a, b) => b.sortTime - a.sortTime);
   })();
-  const selectableCheckouts = checkouts.filter((checkout) =>
+  const selectableCheckouts = visibleCheckouts.filter((checkout) =>
     canSelectCheckout(
       checkout.callStatus,
       checkout.callScheduled,
@@ -437,6 +521,8 @@ export function AbandonedCheckoutsPanel() {
     setCheckouts([]);
     setCompletedCheckouts([]);
     setShownCompletedDates(new Set());
+    setCollapsedDates(new Set());
+    setLastCallDate("");
     setIsLoadingCheckouts(true);
     setHasLoadedCheckouts(false);
     setDetailCheckout(null);
@@ -445,11 +531,13 @@ export function AbandonedCheckoutsPanel() {
 
   useEffect(() => {
     if (!detailCheckout) return;
-    const next = checkouts.find((checkout) => checkout.id === detailCheckout.id);
+    const next =
+      checkouts.find((checkout) => checkout.id === detailCheckout.id) ??
+      completedCheckouts.find((checkout) => checkout.id === detailCheckout.id);
     if (next && next !== detailCheckout) {
       setDetailCheckout(next);
     }
-  }, [checkouts, detailCheckout]);
+  }, [checkouts, completedCheckouts, detailCheckout]);
 
   function toggleCheckoutSelection(checkoutId: string, selected: boolean) {
     setSelectedIds((current) => {
@@ -461,7 +549,82 @@ export function AbandonedCheckoutsPanel() {
   }
 
   function toggleCompletedDate(dateLabel: string) {
+    const willShow = !shownCompletedDates.has(dateLabel);
     setShownCompletedDates((current) => {
+      const next = new Set(current);
+      if (next.has(dateLabel)) next.delete(dateLabel);
+      else next.add(dateLabel);
+      return next;
+    });
+    if (willShow) {
+      setCollapsedDates((current) => {
+        if (!current.has(dateLabel)) return current;
+        const next = new Set(current);
+        next.delete(dateLabel);
+        return next;
+      });
+    }
+  }
+
+  async function fetchAllForDate(dateLabel: string) {
+    if (!selectedStoreDomain || fetchingDate) return;
+    setFetchingDate(dateLabel);
+    try {
+      const result = await fetchAbandonedCheckoutsForDate(
+        selectedStoreDomain,
+        dateLabel,
+      );
+      if (!result.success) {
+        toast.error(result.error ?? "Failed to fetch checkouts", {
+          duration: 12_000,
+        });
+        return;
+      }
+      setCheckouts(result.checkouts);
+      setCompletedCheckouts(result.completedCheckouts ?? []);
+      setTotalCount(result.totalCount ?? result.checkouts.length);
+      setLastSyncedAt(result.syncedAt);
+      setCollapsedDates((current) => {
+        if (!current.has(dateLabel)) return current;
+        const next = new Set(current);
+        next.delete(dateLabel);
+        return next;
+      });
+      setShownCompletedDates((current) => {
+        if (current.has(dateLabel)) return current;
+        const next = new Set(current);
+        next.add(dateLabel);
+        return next;
+      });
+      if (result.matched === 0) {
+        toast.info(`No sheet rows for ${dateLabel}`);
+      } else {
+        toast.success(
+          `Synced ${result.syncedCount} checkout${result.syncedCount === 1 ? "" : "s"} for ${dateLabel}`,
+        );
+      }
+      if (result.warning) {
+        toast.warning(result.warning, { duration: 10_000 });
+      }
+    } finally {
+      setFetchingDate(null);
+    }
+  }
+
+  const allDatesCollapsed =
+    dateGroups.length > 0 &&
+    dateGroups.every((group) => collapsedDates.has(group.label));
+
+  function toggleAllDates() {
+    if (allDatesCollapsed) {
+      setCollapsedDates(new Set());
+      return;
+    }
+    setCollapsedDates(new Set(dateGroups.map((group) => group.label)));
+  }
+
+  function toggleDateCollapsed(dateLabel: string) {
+    setCollapsedDates((current) => {
       const next = new Set(current);
       if (next.has(dateLabel)) next.delete(dateLabel);
       else next.add(dateLabel);
@@ -470,7 +633,7 @@ export function AbandonedCheckoutsPanel() {
   }
 
   function toggleDateSelection(dateLabel: string, selected: boolean) {
-    const ids = checkouts
+    const ids = visibleCheckouts
       .filter(
         (checkout) =>
           abandonmentDateLabel(checkout.shopifyCreatedAt) === dateLabel &&
@@ -628,6 +791,49 @@ export function AbandonedCheckoutsPanel() {
     });
   }
 
+  function handleBulkStatus(nextStatus: string) {
+    if (!selectedStoreDomain || selectedCount === 0 || isBulkStatus) return;
+    const option = MANUAL_CHECKOUT_STATUSES.find((item) => item.status === nextStatus);
+    if (!option) return;
+
+    startBulkStatus(async () => {
+      const result = await setCheckoutsCallStatusAction(
+        selectedStoreDomain,
+        Array.from(selectedIds),
+        option.status,
+      );
+      if (!result.success && result.updated === 0) {
+        toast.error(result.error ?? "Failed to update status");
+        return;
+      }
+      if (result.failed > 0) {
+        toast.warning(
+          `Updated ${result.updated}. ${result.failed} could not be changed.`,
+        );
+      } else {
+        toast.success(
+          option.skipsSchedule
+            ? `Marked ${result.updated} as ${option.label.toLowerCase()}. Schedules were cleared.`
+            : `Marked ${result.updated} pending. Schedule them again if they should be called.`,
+        );
+      }
+      if (option.status === CallStatus.COMPLETED) {
+        const dates = new Set(
+          [...checkouts, ...completedCheckouts]
+            .filter((checkout) => selectedIds.has(checkout.id))
+            .map((checkout) => abandonmentDateLabel(checkout.shopifyCreatedAt)),
+        );
+        setShownCompletedDates((current) => {
+          const next = new Set(current);
+          for (const date of Array.from(dates)) next.add(date);
+          return next;
+        });
+      }
+      setSelectedIds(new Set());
+      void refreshOpenCheckouts({ silent: true });
+    });
+  }
+
   function handleBulkCancelSchedule() {
     if (!selectedStoreDomain || selectedCount === 0) return;
 
@@ -694,7 +900,7 @@ export function AbandonedCheckoutsPanel() {
 
     const interval = setInterval(() => {
       void refreshOpenCheckouts({ silent: true });
-    }, 5_000);
+    }, 30_000);
 
     return () => clearInterval(interval);
   }, [
@@ -794,6 +1000,34 @@ export function AbandonedCheckoutsPanel() {
                 </span>
               ) : null}
             </div>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="last-call-date" className="text-xs text-muted-foreground">
+                Last call
+              </Label>
+              <Input
+                id="last-call-date"
+                type="date"
+                value={lastCallDate}
+                onChange={(event) => setLastCallDate(event.target.value)}
+                className="h-9 w-36 text-xs"
+                aria-label="Filter by last call date"
+              />
+              {lastCallDate ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setLastCallDate("")}
+                >
+                  Clear
+                </Button>
+              ) : null}
+            </div>
+            {dateGroups.length > 0 ? (
+              <Button variant="outline" size="sm" onClick={toggleAllDates}>
+                {allDatesCollapsed ? "Expand all" : "Collapse all"}
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               size="sm"
@@ -980,6 +1214,31 @@ export function AbandonedCheckoutsPanel() {
                   )}
                   Schedule
                 </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={isBulkStatus || isBulkStopping || isBulkScheduling}
+                    >
+                      {isBulkStatus ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : null}
+                      Set status
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-52">
+                    <DropdownMenuLabel>Set status</DropdownMenuLabel>
+                    {MANUAL_CHECKOUT_STATUSES.map((option) => (
+                      <DropdownMenuItem
+                        key={option.status}
+                        onSelect={() => handleBulkStatus(option.status)}
+                      >
+                        {option.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <Button
                   size="sm"
                   variant="destructive"
@@ -997,12 +1256,17 @@ export function AbandonedCheckoutsPanel() {
                   size="sm"
                   variant="ghost"
                   onClick={() => setSelectedIds(new Set())}
-                  disabled={isBulkStopping}
+                  disabled={isBulkStopping || isBulkStatus}
                 >
                   Clear selection
                 </Button>
               </div>
             )}
+            {dateGroups.length === 0 ? (
+              <p className="px-4 py-12 text-center text-sm text-muted-foreground">
+                No checkouts were last called on this date.
+              </p>
+            ) : (
             <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
@@ -1025,6 +1289,9 @@ export function AbandonedCheckoutsPanel() {
                       Abandoned
                     </TableHead>
                     <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
+                      Last call
+                    </TableHead>
+                    <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
                       Value
                     </TableHead>
                     <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">
@@ -1041,7 +1308,7 @@ export function AbandonedCheckoutsPanel() {
                 <TableBody>
                   {dateGroups.map((group) => {
                     const dateLabel = group.label;
-                    const dateCheckouts = checkouts.filter(
+                    const dateCheckouts = visibleCheckouts.filter(
                       (row) =>
                         abandonmentDateLabel(row.shopifyCreatedAt) === dateLabel &&
                         canSelectCheckout(
@@ -1056,15 +1323,16 @@ export function AbandonedCheckoutsPanel() {
                     const allOnDateSelected =
                       dateCheckouts.length > 0 &&
                       selectedOnDate === dateCheckouts.length;
-                    const completedOnDate = completedCheckouts.filter(
+                    const completedOnDate = visibleCompletedCheckouts.filter(
                       (row) =>
                         abandonmentDateLabel(row.shopifyCreatedAt) === dateLabel,
                     ).length;
+                    const collapsed = collapsedDates.has(dateLabel);
 
                     return (
                       <Fragment key={dateLabel}>
-                        <TableRow className="border-0 hover:bg-transparent">
-                          <TableCell className="border-0 bg-foreground/10 px-3 py-2.5">
+                        <TableRow className="border-y border-border bg-muted/60 hover:bg-muted">
+                          <TableCell className="bg-transparent px-3 py-2.5 shadow-[inset_3px_0_0_0] shadow-foreground/40">
                             <Checkbox
                               checked={
                                 selectedOnDate > 0 && !allOnDateSelected
@@ -1079,28 +1347,61 @@ export function AbandonedCheckoutsPanel() {
                             />
                           </TableCell>
                           <TableCell
-                            colSpan={6}
-                            className="border-0 bg-foreground/10 px-3 py-2.5"
+                            colSpan={7}
+                            className="bg-transparent px-3 py-2.5"
                           >
-                            <div className="flex flex-wrap items-center gap-3">
-                              <span className="text-sm font-semibold uppercase tracking-wide text-foreground">
-                                {dateLabel}
-                              </span>
-                              {completedOnDate > 0 ? (
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex min-w-0 flex-wrap items-center gap-3">
                                 <button
                                   type="button"
-                                  className="text-xs font-medium text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
-                                  onClick={() => toggleCompletedDate(dateLabel)}
+                                  className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-foreground"
+                                  aria-expanded={!collapsed}
+                                  aria-label={`${collapsed ? "Expand" : "Collapse"} ${dateLabel}`}
+                                  onClick={() => toggleDateCollapsed(dateLabel)}
                                 >
-                                  {shownCompletedDates.has(dateLabel)
-                                    ? "Hide completed"
-                                    : `Show completed (${completedOnDate})`}
+                                  <ChevronRight
+                                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+                                      collapsed ? "" : "rotate-90"
+                                    }`}
+                                  />
+                                  {dateLabel}
+                                  <span className="text-xs font-medium normal-case tracking-normal text-foreground/60">
+                                    {group.rows.length}
+                                  </span>
                                 </button>
+                                {completedOnDate > 0 && !lastCallDate ? (
+                                  <button
+                                    type="button"
+                                    className="text-xs font-medium text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+                                    onClick={() => toggleCompletedDate(dateLabel)}
+                                  >
+                                    {shownCompletedDates.has(dateLabel)
+                                      ? "Hide completed"
+                                      : `Show completed (${completedOnDate})`}
+                                  </button>
+                                ) : null}
+                              </div>
+                              {dateLabel !== "No date" ? (
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  className="h-7 shrink-0 px-2.5 text-xs"
+                                  disabled={fetchingDate !== null}
+                                  onClick={() => void fetchAllForDate(dateLabel)}
+                                >
+                                  {fetchingDate === dateLabel ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : null}
+                                  {fetchingDate === dateLabel ? "Fetching…" : "Fetch all"}
+                                </Button>
                               ) : null}
                             </div>
                           </TableCell>
                         </TableRow>
-                        {group.rows.map((checkout) => (
+                        {collapsed
+                          ? null
+                          : group.rows.map((checkout) => (
                           <CheckoutRow
                             key={checkout.id}
                             checkout={checkout}
@@ -1126,6 +1427,7 @@ export function AbandonedCheckoutsPanel() {
                   })}
                 </TableBody>
               </Table>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3">
               <div className="space-y-0.5">
                 <span className="text-xs text-muted-foreground">

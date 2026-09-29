@@ -14,10 +14,11 @@ import {
   RefreshCw,
   ShoppingCart,
 } from "lucide-react";
-import { useMemo, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   fetchTtaiSessionDetailsForCallLog,
+  getCheckoutLogDetail,
   writeCallFeedbackForCallLog,
 } from "@/app/actions/store";
 import { Badge } from "@/components/ui/badge";
@@ -108,12 +109,36 @@ function CallLogDetailSheet({
 }) {
   const [isPending, startTransition] = useTransition();
   const [isWritingToSheet, startWriteToSheet] = useTransition();
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [detail, setDetail] = useState<CallLogEntry | null>(null);
   const addCallLog = useAnalyticsStore((s) => s.addCallLog);
 
-  const toolCallsJson = log?.latestAttempt?.toolCallsJson;
+  useEffect(() => {
+    if (!open || !log) {
+      setDetail(null);
+      return;
+    }
+
+    let active = true;
+    setIsLoadingDetail(true);
+    setDetail(null);
+    getCheckoutLogDetail(log.id)
+      .then((row) => {
+        if (active) setDetail(row);
+      })
+      .finally(() => {
+        if (active) setIsLoadingDetail(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [open, log?.id, log?.callStatus]);
+
+  const toolCallsJson = detail?.latestAttempt?.toolCallsJson;
   const hasSessionDetails =
     isTtaiWebhookStore(toolCallsJson) && Boolean(toolCallsJson.sessionDetails);
-  const canFetchSessionDetails = Boolean(log?.sessionId);
+  const canFetchSessionDetails = Boolean(detail?.sessionId ?? log?.sessionId);
 
   function handleFetchSessionDetails() {
     if (!log) return;
@@ -121,6 +146,7 @@ function CallLogDetailSheet({
       const result = await fetchTtaiSessionDetailsForCallLog(log.id);
       if (result.log) {
         addCallLog(result.log);
+        setDetail(result.log);
       }
       if (result.success) {
         toast.success("Session details loaded from TTAI");
@@ -195,41 +221,51 @@ function CallLogDetailSheet({
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
+          {isLoadingDetail ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading call details…
+            </p>
+          ) : !detail ? (
+            <p className="text-sm text-muted-foreground">
+              Could not load this call.
+            </p>
+          ) : (
           <div className="space-y-6">
             <section className="grid gap-3 sm:grid-cols-2">
               <DetailField label="When">{when.full}</DetailField>
               <DetailField label="Attempts">
-                {log.attemptCount || "—"}
-                {log.latestAttempt
-                  ? ` · last ${log.latestAttempt.trigger}`
+                {detail.attemptCount || "—"}
+                {detail.latestAttempt
+                  ? ` · last ${detail.latestAttempt.trigger}`
                   : ""}
               </DetailField>
               <DetailField label="Order ID">
-                <span className="font-mono text-xs">{log.checkoutToken}</span>
+                <span className="font-mono text-xs">{detail.checkoutToken}</span>
               </DetailField>
               <DetailField label="Session ID">
                 <span className="break-all font-mono text-xs">
-                  {log.sessionId ?? "—"}
+                  {detail.sessionId ?? "—"}
                 </span>
               </DetailField>
               <DetailField label="Duration">
-                {formatDuration(log.latestAttempt?.durationSec)}
+                {formatDuration(detail.latestAttempt?.durationSec)}
               </DetailField>
-              {log.draftOrderId && (
+              {detail.draftOrderId && (
                 <DetailField label="Draft order">
-                  <span className="font-mono text-xs">{log.draftOrderId}</span>
+                  <span className="font-mono text-xs">{detail.draftOrderId}</span>
                 </DetailField>
               )}
-              {log.isRepeatCustomer != null && (
+              {detail.isRepeatCustomer != null && (
                 <DetailField label="Repeat customer">
-                  {log.isRepeatCustomer
-                    ? log.repeatCustomerOrderCount != null
-                      ? `${log.repeatCustomerOrderCount} order${
-                          log.repeatCustomerOrderCount === 1 ? "" : "s"
+                  {detail.isRepeatCustomer
+                    ? detail.repeatCustomerOrderCount != null
+                      ? `${detail.repeatCustomerOrderCount} order${
+                          detail.repeatCustomerOrderCount === 1 ? "" : "s"
                         } in window${
-                          log.repeatCustomerLastOrderAt
+                          detail.repeatCustomerLastOrderAt
                             ? ` · last ${formatDateLabel(
-                                log.repeatCustomerLastOrderAt
+                                detail.repeatCustomerLastOrderAt
                               )}`
                             : ""
                         }`
@@ -237,34 +273,34 @@ function CallLogDetailSheet({
                     : "No"}
                 </DetailField>
               )}
-              {log.checkoutUrl && (
+              {detail.checkoutUrl && (
                 <DetailField label="Cart checkout" className="sm:col-span-2">
                   <a
-                    href={log.checkoutUrl}
+                    href={detail.checkoutUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title={log.checkoutUrl}
+                    title={detail.checkoutUrl}
                     className="inline-flex max-w-full items-center gap-1 text-primary underline-offset-4 hover:underline"
                   >
-                    {formatShortUrl(log.checkoutUrl)}
+                    {formatShortUrl(detail.checkoutUrl)}
                     <ExternalLink className="h-3 w-3 shrink-0" />
                   </a>
                 </DetailField>
               )}
             </section>
 
-            {log.lastError && (
+            {detail.lastError && (
               <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                {log.lastError}
+                {detail.lastError}
               </div>
             )}
 
-            {log.latestAttempt?.failureStage && (
+            {detail.latestAttempt?.failureStage && (
               <p className="text-sm text-muted-foreground">
                 Failed at stage:{" "}
                 <span className="font-medium text-foreground">
-                  {log.latestAttempt.failureStage}
+                  {detail.latestAttempt.failureStage}
                 </span>
               </p>
             )}
@@ -313,12 +349,13 @@ function CallLogDetailSheet({
               </div>
 
               <TtaiCallDetails
-                transcript={log.latestAttempt?.transcript}
-                aiSummary={log.aiSummary}
-                toolCallsJson={log.latestAttempt?.toolCallsJson}
+                transcript={detail.latestAttempt?.transcript}
+                aiSummary={detail.aiSummary}
+                toolCallsJson={detail.latestAttempt?.toolCallsJson}
               />
             </section>
           </div>
+          )}
         </div>
       </SheetContent>
     </Sheet>
@@ -355,9 +392,6 @@ function CallLogRow({
 }) {
   const StatusIcon = statusIcon(log.callStatus as CallStatus);
   const when = formatCallTime(log.latestAttempt?.startedAt ?? log.updatedAt);
-  const hasDetails =
-    isTtaiWebhookStore(log.latestAttempt?.toolCallsJson) &&
-    Boolean(log.latestAttempt?.toolCallsJson.sessionDetails);
 
   return (
     <button
@@ -419,11 +453,6 @@ function CallLogRow({
             Repeat
           </span>
         )}
-        {hasDetails && (
-          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
-            Details
-          </span>
-        )}
       </div>
 
       <div className="hidden w-20 shrink-0 text-right sm:block">
@@ -453,22 +482,27 @@ function CallLogRow({
 interface CallLogPanelProps {
   /** Totals for the header; comes from the analytics view when available. */
   summary?: { totalCalls: number; totalMinutes: number };
-  /** ISO start of the selected date range; older calls are hidden. */
+  /** Inclusive start instant. Older calls are hidden. */
   since?: string;
+  /** Inclusive end instant. Later calls are hidden. */
+  until?: string;
 }
 
-export function CallLogPanel({ summary, since }: CallLogPanelProps = {}) {
+export function CallLogPanel({ summary, since, until }: CallLogPanelProps = {}) {
   const allCallLogs = useFilteredCallLogs();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const callLogs = useMemo(() => {
-    if (!since) return allCallLogs;
-    const from = new Date(since).getTime();
-    return allCallLogs.filter(
-      (log) =>
-        new Date(log.latestAttempt?.startedAt ?? log.updatedAt).getTime() >= from
-    );
-  }, [allCallLogs, since]);
+    const from = since ? new Date(since).getTime() : null;
+    const to = until ? new Date(until).getTime() : null;
+    if (from == null && to == null) return allCallLogs;
+    return allCallLogs.filter((log) => {
+      const at = new Date(log.latestAttempt?.startedAt ?? log.updatedAt).getTime();
+      if (from != null && at < from) return false;
+      if (to != null && at > to) return false;
+      return true;
+    });
+  }, [allCallLogs, since, until]);
 
   const selectedLog = useMemo(
     () => callLogs.find((log) => log.id === selectedId) ?? null,

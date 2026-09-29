@@ -187,12 +187,16 @@ export function canStopCall(status: CallStatus, callScheduled: boolean): boolean
   return isActiveCall(status) || (status === CallStatus.PENDING && callScheduled);
 }
 
+export function canSetCheckoutStatus(status: CallStatus): boolean {
+  return !isActiveCall(status);
+}
+
 export function canSelectCheckout(
   status: CallStatus,
-  callScheduled: boolean,
-  phone: string | null | undefined
+  _callScheduled?: boolean,
+  _phone?: string | null
 ): boolean {
-  return canEditSchedule(status, phone) || canStopCall(status, callScheduled);
+  return canSetCheckoutStatus(status);
 }
 
 export function canEditSchedule(
@@ -249,6 +253,29 @@ export const AUTO_CALL_ENROLLMENT_OPTIONS: ReadonlyArray<{
     description: "The last attempt ended because the line was busy.",
   },
 ];
+
+/** Statuses an operator can set from the recovery table. */
+export const MANUAL_CHECKOUT_STATUSES: ReadonlyArray<{
+  status: CallStatus;
+  label: string;
+  /** These clear the schedule so auto-call will not dial the row. */
+  skipsSchedule: boolean;
+}> = [
+  { status: CallStatus.PENDING, label: "Pending", skipsSchedule: false },
+  { status: CallStatus.COMPLETED, label: "Completed", skipsSchedule: true },
+  { status: CallStatus.SUPERSEDED, label: "Duplicate cart", skipsSchedule: true },
+  {
+    status: CallStatus.ALREADY_PLACED_ORDER,
+    label: "Order placed already",
+    skipsSchedule: true,
+  },
+];
+
+export function isManualCheckoutStatus(
+  status: string,
+): status is (typeof MANUAL_CHECKOUT_STATUSES)[number]["status"] {
+  return MANUAL_CHECKOUT_STATUSES.some((option) => option.status === status);
+}
 
 export function callStatusesForEnrollment(
   selection: AutoCallEnrollmentSelection

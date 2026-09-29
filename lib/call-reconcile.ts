@@ -1,6 +1,7 @@
 import { CallStatus, type Store } from "@prisma/client";
 import { db } from "@/lib/db";
 import { maybeScheduleTelephonyRetry } from "@/lib/call-queue";
+import { writeCheckoutCallFeedback } from "@/lib/call-feedback-sheet";
 import { recordPipelineEvent } from "@/lib/call-pipeline-events";
 import { sanitizeRecoveryError } from "@/lib/recovery-error";
 import {
@@ -286,6 +287,21 @@ export async function reconcileStuckDispatchedCalls(
       store,
       status: failure.callStatus,
     });
+
+    const feedbackResult = await writeCheckoutCallFeedback(store, attempt.checkout, {
+      callStatus: failure.callStatus,
+      retryScheduled: retry.retried,
+    });
+    if (!feedbackResult.ok && !feedbackResult.skipped) {
+      console.warn(
+        "[reconcile] sheet feedback write failed",
+        JSON.stringify({
+          storeDomain: store.storeDomain,
+          checkoutId: attempt.abandonedCheckoutId,
+          error: feedbackResult.error,
+        }),
+      );
+    }
 
     result.resolved++;
     await logPoll(

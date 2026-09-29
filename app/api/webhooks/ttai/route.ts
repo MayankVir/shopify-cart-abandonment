@@ -4,10 +4,7 @@ import { Webhook } from "standardwebhooks";
 import { db } from "@/lib/db";
 import { maybeScheduleTelephonyRetry } from "@/lib/call-queue";
 import { outcomeFromSession } from "@/lib/call-reconcile";
-import {
-  buildCallFeedbackContext,
-  writeCallFeedbackIfEnabled,
-} from "@/lib/call-feedback-sheet";
+import { writeCheckoutCallFeedback } from "@/lib/call-feedback-sheet";
 import {
   buildSessionSummary,
   durationSecFromTtaiSession,
@@ -525,27 +522,28 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // A retry is recorded on the checkout only. The sheet is written when the
-  // call is finished for good (connected, or the retry budget is used up).
-  if (!retry.retried) {
-    const feedbackContext = buildCallFeedbackContext(attempt.checkout);
-    const extractionFeedback = formatExtractionFeedback(
-      finalWebhookStore.sessionDetails?.extraction_results,
-    );
-    const feedbackResult = await writeCallFeedbackIfEnabled(attempt.checkout.store, {
-      ...feedbackContext,
+  // Write after every attempt, including when another dial is queued, so each
+  // try has its own status column on the sheet.
+  const extractionFeedback = formatExtractionFeedback(
+    finalWebhookStore.sessionDetails?.extraction_results,
+  );
+  const feedbackResult = await writeCheckoutCallFeedback(
+    attempt.checkout.store,
+    attempt.checkout,
+    {
       callStatus: outcome.callStatus,
       feedbackText: extractionFeedback ?? transcript ?? attempt.checkout.aiSummary,
-    });
-    if (!feedbackResult.ok && !feedbackResult.skipped) {
-      console.warn(
-        "[ttai-webhook] sheet feedback write failed",
-        JSON.stringify({
-          error: feedbackResult.error,
-          checkoutToken: attempt.checkout.checkoutToken,
-        })
-      );
-    }
+      retryScheduled: retry.retried,
+    },
+  );
+  if (!feedbackResult.ok && !feedbackResult.skipped) {
+    console.warn(
+      "[ttai-webhook] sheet feedback write failed",
+      JSON.stringify({
+        error: feedbackResult.error,
+        checkoutToken: attempt.checkout.checkoutToken,
+      })
+    );
   }
 
   await logEvent(

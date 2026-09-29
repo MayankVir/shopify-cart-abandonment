@@ -7,6 +7,8 @@ import {
   canEditSchedule,
   canScheduleCallback,
   canStopCall,
+  isManualCheckoutStatus,
+  MANUAL_CHECKOUT_STATUSES,
   nextCallScheduledFlag,
   type AutoCallEnrollmentSelection,
 } from "@/lib/call-status";
@@ -70,7 +72,10 @@ import {
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
 import { parseLineItems } from "@/lib/line-items";
-import { syncAbandonedCheckoutsFromSheet } from "@/lib/sheet-sync";
+import {
+  syncAbandonedCheckoutsForDate,
+  syncAbandonedCheckoutsFromSheet,
+} from "@/lib/sheet-sync";
 import { clampRepeatCustomerWindowDays } from "@/lib/shopify-repeat-customer";
 
 async function guardStoreAccess(storeDomain: string): Promise<string | null> {
@@ -140,6 +145,8 @@ export interface AbandonedCheckoutRow {
   storeDomain: string;
   latestAttempt: CallAttemptRow | null;
   autoRetryCount: number;
+  telephonyRetryCount: number;
+  attemptCount: number;
   lineItems: Array<{ title: string; quantity: number }>;
 }
 
@@ -181,9 +188,47 @@ export interface SyncOptions {
   sheetPage?: number;
 }
 
-function toAttemptRow(
-  a: NonNullable<Awaited<ReturnType<typeof db.callAttempt.findFirst>>>
-): CallAttemptRow {
+/** List polls omit transcript and tool-call JSON. The drawer loads those on open. */
+const LIST_ATTEMPT_SELECT = {
+  id: true,
+  callId: true,
+  sessionId: true,
+  status: true,
+  failureStage: true,
+  failureReason: true,
+  trigger: true,
+  retryNumber: true,
+  startedAt: true,
+  endedAt: true,
+  durationSec: true,
+} satisfies Prisma.CallAttemptSelect;
+
+const CHECKOUT_LIST_INCLUDE = {
+  callAttempts: {
+    orderBy: { startedAt: "desc" as const },
+    take: 1,
+    select: LIST_ATTEMPT_SELECT,
+  },
+  _count: { select: { callAttempts: true } },
+} satisfies Prisma.AbandonedCheckoutInclude;
+
+type AttemptRowSource = {
+  id: string;
+  callId: string | null;
+  sessionId: string | null;
+  status: CallStatus;
+  failureStage: string | null;
+  failureReason: string | null;
+  trigger: string;
+  retryNumber: number;
+  startedAt: Date;
+  endedAt: Date | null;
+  durationSec: number | null;
+  transcript?: string | null;
+  toolCallsJson?: unknown;
+};
+
+function toAttemptRow(a: AttemptRowSource): CallAttemptRow {
   return {
     id: a.id,
     callId: a.callId,
@@ -191,8 +236,8 @@ function toAttemptRow(
     status: a.status,
     failureStage: a.failureStage,
     failureReason: sanitizeRecoveryError(a.failureReason) || null,
-    transcript: a.transcript,
-    toolCallsJson: a.toolCallsJson,
+    transcript: a.transcript ?? null,
+    toolCallsJson: a.toolCallsJson ?? null,
     trigger: a.trigger,
     retryNumber: a.retryNumber,
     startedAt: a.startedAt.toISOString(),
@@ -202,9 +247,9 @@ function toAttemptRow(
 }
 
 function toRow(
-  c: Awaited<ReturnType<typeof db.abandonedCheckout.findMany>>[number] & {
-    callAttempts?: Awaited<ReturnType<typeof db.callAttempt.findMany>>;
-  }
+  c: Prisma.AbandonedCheckoutGetPayload<{
+    include: typeof CHECKOUT_LIST_INCLUDE;
+  }>
 ): AbandonedCheckoutRow {
   const latest = c.callAttempts?.[0];
   return {
@@ -231,6 +276,8 @@ function toRow(
     storeDomain: c.storeDomain,
     latestAttempt: latest ? toAttemptRow(latest) : null,
     autoRetryCount: c.autoRetryCount,
+    telephonyRetryCount: c.telephonyRetryCount,
+    attemptCount: c._count?.callAttempts ?? c.callAttempts?.length ?? 0,
     lineItems: parseLineItems(c.lineItemsJson).map((item) => ({
       title: item.title,
       quantity: item.quantity,
@@ -255,9 +302,7 @@ async function fetchOpenCheckouts(storeDomain: string) {
         { createdAt: "desc" },
       ],
       take: CHECKOUT_LIST_MAX_ROWS,
-      include: {
-        callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
-      },
+      include: CHECKOUT_LIST_INCLUDE,
     }),
     db.abandonedCheckout.count({ where }),
   ]);
@@ -276,9 +321,7 @@ async function fetchCompletedCheckouts(storeDomain: string) {
       { createdAt: "desc" },
     ],
     take: 200,
-    include: {
-      callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },
-    },
+    include: CHECKOUT_LIST_INCLUDE,
   });
 
   return checkouts.map(toRow);
@@ -602,6 +645,60 @@ export async function syncAbandonedCheckouts(
   return autoCalls ? { ...result, autoCalls } : result;
 }
 
+export async function fetchAbandonedCheckoutsForDate(
+  storeDomain: string,
+  dateLabel: string,
+): Promise<SyncResult & { matched: number; syncedCount: number }> {
+  const failed = (error: string): SyncResult & { matched: number; syncedCount: number } => ({
+    success: false,
+    checkouts: [],
+    syncedAt: new Date().toISOString(),
+    error,
+    matched: 0,
+    syncedCount: 0,
+  });
+
+  const { userId } = await auth();
+  if (!userId) return failed("Unauthorized");
+
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) return failed(accessError);
+
+  const store = await db.store.findUnique({ where: { storeDomain } });
+  if (!store) return failed("Store not found");
+  if (store.checkoutSyncMode !== CheckoutSyncMode.SHEET) {
+    return failed("Fetch all by date is available when checkout sync uses the sheet.");
+  }
+
+  const label = dateLabel.trim();
+  if (!label || label === "No date") return failed("That row has no date to fetch.");
+
+  try {
+    const fetched = await syncAbandonedCheckoutsForDate(store, label);
+    const [listResult, completedCheckouts] = await Promise.all([
+      fetchOpenCheckouts(storeDomain),
+      fetchCompletedCheckouts(storeDomain),
+    ]);
+    return {
+      success: true,
+      checkouts: listResult.checkouts,
+      completedCheckouts,
+      syncedAt: new Date().toISOString(),
+      syncMode: "sheet",
+      warning:
+        fetched.skipped > 0
+          ? `${fetched.skipped} sheet row(s) skipped (missing variant IDs).`
+          : undefined,
+      totalCount: listResult.totalCount,
+      matched: fetched.matched,
+      syncedCount: fetched.synced,
+    };
+  } catch (error) {
+    console.error("Fetch checkouts for date failed:", error);
+    return failed(error instanceof Error ? error.message : "Fetch failed");
+  }
+}
+
 export async function initiateRecoveryCall(
   checkoutId: string
 ): Promise<{
@@ -670,6 +767,121 @@ export async function initiateRecoveryCall(
 }
 
 const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function applyManualCheckoutStatus(
+  checkout: {
+    id: string;
+    callStatus: CallStatus;
+    callScheduled: boolean;
+  },
+  status: CallStatus,
+): Promise<"updated" | "unchanged" | "blocked"> {
+  if (
+    checkout.callStatus === CallStatus.PREPARING ||
+    checkout.callStatus === CallStatus.DISPATCHED
+  ) {
+    return "blocked";
+  }
+  if (checkout.callStatus === status && !checkout.callScheduled) {
+    return "unchanged";
+  }
+
+  const option = MANUAL_CHECKOUT_STATUSES.find((item) => item.status === status);
+  const skipsSchedule = option?.skipsSchedule ?? status !== CallStatus.PENDING;
+
+  await db.abandonedCheckout.update({
+    where: { id: checkout.id },
+    data: {
+      callStatus: status,
+      callScheduled: false,
+      retryReason: null,
+      autoCallExcluded: skipsSchedule,
+      lastError: skipsSchedule
+        ? status === CallStatus.COMPLETED
+          ? null
+          : `Marked as ${option?.label.toLowerCase() ?? "skipped"}`
+        : null,
+    },
+  });
+  return "updated";
+}
+
+export async function setCheckoutCallStatusAction(
+  checkoutId: string,
+  status: CallStatus,
+): Promise<{ success: boolean; error?: string }> {
+  if (!isManualCheckoutStatus(status)) {
+    return { success: false, error: "That status cannot be set manually" };
+  }
+
+  const checkout = await db.abandonedCheckout.findUnique({
+    where: { id: checkoutId },
+  });
+  if (!checkout) {
+    return { success: false, error: "Checkout not found" };
+  }
+
+  const accessError = await guardStoreAccess(checkout.storeDomain);
+  if (accessError) {
+    return { success: false, error: accessError };
+  }
+
+  const result = await applyManualCheckoutStatus(checkout, status);
+  if (result === "blocked") {
+    return {
+      success: false,
+      error: "Stop the live call before changing its status",
+    };
+  }
+
+  revalidatePath("/dashboard/recovery");
+  return { success: true };
+}
+
+export async function setCheckoutsCallStatusAction(
+  storeDomain: string,
+  checkoutIds: string[],
+  status: CallStatus,
+): Promise<{ success: boolean; updated: number; failed: number; error?: string }> {
+  if (!isManualCheckoutStatus(status)) {
+    return { success: false, updated: 0, failed: 0, error: "That status cannot be set manually" };
+  }
+
+  const accessError = await guardStoreAccess(storeDomain);
+  if (accessError) {
+    return { success: false, updated: 0, failed: 0, error: accessError };
+  }
+
+  const ids = Array.from(new Set(checkoutIds.map((id) => id.trim()).filter(Boolean)));
+  if (ids.length === 0) {
+    return { success: false, updated: 0, failed: 0, error: "Select at least one checkout" };
+  }
+
+  const checkouts = await db.abandonedCheckout.findMany({
+    where: { id: { in: ids }, storeDomain },
+    select: { id: true, callStatus: true, callScheduled: true },
+  });
+
+  let updated = 0;
+  let failed = 0;
+  for (const checkout of checkouts) {
+    const result = await applyManualCheckoutStatus(checkout, status);
+    if (result === "blocked") failed += 1;
+    else updated += 1;
+  }
+  failed += ids.length - checkouts.length;
+
+  revalidatePath("/dashboard/recovery");
+  if (updated === 0 && failed > 0) {
+    return {
+      success: false,
+      updated: 0,
+      failed,
+      error: "Stop any live calls before changing their status",
+    };
+  }
+  return { success: true, updated, failed };
+}
 
 export async function updateCheckoutScheduleAction(
   checkoutId: string,
