@@ -56,8 +56,15 @@ export function Hero() {
                 alt="Custello analytics dashboard with call volume, minutes, and recovered carts"
                 fill
                 priority
-                sizes="(min-width: 1024px) 1024px, 100vw"
-                className="object-cover object-top"
+                sizes="(min-width: 1024px) 1152px, 100vw"
+                className="object-cover object-top dark:hidden"
+              />
+              <Image
+                src="/landing/hero-analytics-dark.jpg"
+                alt="Custello analytics dashboard with call volume, minutes, and recovered carts"
+                fill
+                sizes="(min-width: 1024px) 1152px, 100vw"
+                className="hidden object-cover object-top dark:block"
               />
             </div>
           </div>
