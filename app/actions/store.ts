@@ -345,13 +345,6 @@ export async function getStoresForDashboard() {
   return getStoresForUser(userId);
 }
 
-type CheckoutWithLatestAttempt = Prisma.AbandonedCheckoutGetPayload<{
-  include: {
-    callAttempts: { orderBy: { startedAt: "desc" }; take: 1 };
-    _count: { select: { callAttempts: true } };
-  };
-}>;
-
 /** Single-row reads (session fetch) still load the transcript and tool-call JSON. */
 const CALL_LOG_INCLUDE = {
   callAttempts: { orderBy: { startedAt: "desc" }, take: 1 },

@@ -191,11 +191,7 @@ export function canSetCheckoutStatus(status: CallStatus): boolean {
   return !isActiveCall(status);
 }
 
-export function canSelectCheckout(
-  status: CallStatus,
-  _callScheduled?: boolean,
-  _phone?: string | null
-): boolean {
+export function canSelectCheckout(status: CallStatus): boolean {
   return canSetCheckoutStatus(status);
 }
 

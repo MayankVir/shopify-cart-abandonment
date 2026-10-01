@@ -193,7 +193,7 @@ export function DraftSheetPanel() {
             <code>draft_order_context</code>, and <code>Repeat Customer</code>.
             Write call feedback keeps <code>ttai_call_feedback</code>, then adds
             one column per dial (<code>ttai_retry_1</code>,{" "}
-            <code>ttai_retry_2</code>, …). Each cell has that dial's status,
+            <code>ttai_retry_2</code>, …). Each cell has the status for that dial,
             extraction, and session link. Neither action places a call.
           </p>
         </div>

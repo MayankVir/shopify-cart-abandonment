@@ -473,11 +473,7 @@ export function AbandonedCheckoutsPanel() {
       .sort((a, b) => b.sortTime - a.sortTime);
   })();
   const selectableCheckouts = visibleCheckouts.filter((checkout) =>
-    canSelectCheckout(
-      checkout.callStatus,
-      checkout.callScheduled,
-      checkout.customerPhone,
-    ),
+    canSelectCheckout(checkout.callStatus),
   );
   const selectedCount = selectedIds.size;
   const selectedCanRemove = checkouts.some(
@@ -655,11 +651,7 @@ export function AbandonedCheckoutsPanel() {
       .filter(
         (checkout) =>
           abandonmentDateLabel(checkout.shopifyCreatedAt) === dateLabel &&
-          canSelectCheckout(
-            checkout.callStatus,
-            checkout.callScheduled,
-            checkout.customerPhone,
-          ),
+          canSelectCheckout(checkout.callStatus),
       )
       .map((checkout) => checkout.id);
 
@@ -1333,11 +1325,7 @@ export function AbandonedCheckoutsPanel() {
                     const dateCheckouts = visibleCheckouts.filter(
                       (row) =>
                         abandonmentDateLabel(row.shopifyCreatedAt) === dateLabel &&
-                        canSelectCheckout(
-                          row.callStatus,
-                          row.callScheduled,
-                          row.customerPhone,
-                        ),
+                        canSelectCheckout(row.callStatus),
                     );
                     const selectedOnDate = dateCheckouts.filter((row) =>
                       selectedIds.has(row.id),
@@ -1427,11 +1415,7 @@ export function AbandonedCheckoutsPanel() {
                           <CheckoutRow
                             key={checkout.id}
                             checkout={checkout}
-                            selectable={canSelectCheckout(
-                              checkout.callStatus,
-                              checkout.callScheduled,
-                              checkout.customerPhone,
-                            )}
+                            selectable={canSelectCheckout(checkout.callStatus)}
                             selected={selectedIds.has(checkout.id)}
                             autoCallsEnabled={autoCallsEnabled}
                             onSelectedChange={(selected) =>
