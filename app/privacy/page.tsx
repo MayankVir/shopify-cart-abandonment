@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { LegalPage } from "@/components/landing/legal-page";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy — RecoverAI",
+  title: "Privacy Policy — Custello",
   description:
-    "How RecoverAI collects, uses, and shares data for abandoned-cart recovery calls.",
+    "How Custello collects, uses, and shares data for abandoned-cart recovery calls.",
 };
 
 export default function PrivacyPolicyPage() {
@@ -12,9 +12,9 @@ export default function PrivacyPolicyPage() {
     <LegalPage title="Privacy Policy">
       <p>Last updated: 9 September 2026</p>
       <p>
-        RecoverAI (“we”, “us”) provides merchants with automated and manual
+        Custello (“we”, “us”) provides merchants with automated and manual
         voice recovery calls for abandoned Shopify checkouts. This policy
-        describes the information we process when you visit recoverai, create an
+        describes the information we process when you visit Custello, create an
         account, connect a store, or place or receive a recovery call.
       </p>
 
@@ -82,7 +82,7 @@ export default function PrivacyPolicyPage() {
       </ul>
 
       <h2>Sharing</h2>
-      <p>We share data with processors who help us run RecoverAI:</p>
+      <p>We share data with processors who help us run Custello:</p>
       <ul>
         <li>Clerk — authentication.</li>
         <li>Shopify — store, checkout, customer, and order APIs the merchant authorizes.</li>
@@ -99,7 +99,7 @@ export default function PrivacyPolicyPage() {
       </ul>
       <p>
         We do not sell personal information. We may disclose information if
-        required by law or to protect RecoverAI, merchants, or shoppers from
+        required by law or to protect Custello, merchants, or shoppers from
         fraud or harm.
       </p>
 
@@ -134,14 +134,14 @@ export default function PrivacyPolicyPage() {
 
       <h2>International transfers</h2>
       <p>
-        RecoverAI and its processors may process data in countries other than
+        Custello and its processors may process data in countries other than
         yours, including where Shopify, Clerk, TTAI, or our hosts operate.
       </p>
 
       <h2>Contact</h2>
       <p>
         For privacy requests, contact the merchant who called you, or email
-        the RecoverAI operator listed on your RecoverAI account or contract.
+        the Custello operator listed on your Custello account or contract.
       </p>
     </LegalPage>
   );

@@ -6,7 +6,6 @@ import {
   BarChart3,
   CreditCard,
   FileSpreadsheet,
-  Phone,
   ScrollText,
   Settings,
   Shield,
@@ -16,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { isNavItemActive, useNavPending } from "@/components/dashboard/nav-pending";
+import { Logo } from "@/components/logo";
 import { SidebarUser, type SidebarAccountSummary } from "@/components/dashboard/sidebar-user";
 import {
   Sidebar,
@@ -77,17 +77,18 @@ function SidebarBrandLink() {
   const { onClick } = usePendingNavClick("/dashboard/recovery");
 
   return (
-    <SidebarMenuButton size="lg" asChild tooltip="Recovery">
+    <SidebarMenuButton
+      size="lg"
+      asChild
+      tooltip="Custello"
+      className="h-auto py-2"
+    >
       <Link href="/dashboard/recovery" prefetch onClick={onClick}>
-        <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-          <Phone className="size-4" />
-        </div>
-        <div className="grid flex-1 text-left text-sm leading-tight">
-          <span className="truncate font-semibold">Cart Recovery IVR</span>
-          <span className="truncate text-xs text-sidebar-foreground/60">
-            Voice platform
-          </span>
-        </div>
+        <Logo className="group-data-[collapsible=icon]:hidden" />
+        <span className="hidden items-end text-sm font-black leading-none tracking-tight text-slate-900 group-data-[collapsible=icon]:inline-flex dark:text-white">
+          c
+          <span className="mb-[0.14em] ml-[0.06em] size-[0.2em] shrink-0 rounded-full bg-primary" />
+        </span>
       </Link>
     </SidebarMenuButton>
   );

@@ -22,9 +22,9 @@ const fontMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Shopify IVR Abandoned Cart Recovery",
+  title: "Custello",
   description:
-    "Multi-tenant B2B platform for abandoned cart recovery via IVR and live analytics",
+    "An AI voice agent that recovers lost revenue from abandoned carts and deliveries that would otherwise return.",
 };
 
 export default function RootLayout({

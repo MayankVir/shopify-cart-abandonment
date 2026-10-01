@@ -7,12 +7,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider
       attribute="class"
-      defaultTheme="dark"
+      defaultTheme="light"
+      enableSystem={false}
       disableTransitionOnChange
     >
       {children}
       <Toaster
-        theme="dark"
+        theme="system"
         position="top-right"
         toastOptions={{
           classNames: {

@@ -72,6 +72,7 @@ import {
   resolveStoreAdminAccessToken,
 } from "@/lib/shopify-admin-token";
 import { parseLineItems } from "@/lib/line-items";
+import { startTiming, type TimingLog, type TimingReport } from "@/lib/timing-log";
 import {
   syncAbandonedCheckoutsForDate,
   syncAbandonedCheckoutsFromSheet,
@@ -164,6 +165,7 @@ export interface SyncResult {
   shopifyPageInfo?: AbandonedCheckoutsPageInfo;
   sheetPageInfo?: SheetPageInfo;
   error?: string;
+  timings?: TimingReport;
 }
 
 export interface SheetPageInfo {
@@ -181,6 +183,7 @@ export interface CheckoutListResult {
   completedCheckouts?: AbandonedCheckoutRow[];
   totalCount: number;
   error?: string;
+  timings?: TimingReport;
 }
 
 export interface SyncOptions {
@@ -288,83 +291,114 @@ function toRow(
 /** Safety ceiling so an unexpectedly large queue can't produce a huge payload. */
 const CHECKOUT_LIST_MAX_ROWS = 500;
 
-async function fetchOpenCheckouts(storeDomain: string) {
+async function fetchOpenCheckouts(storeDomain: string, timing?: TimingLog) {
   const where = {
     storeDomain,
     callStatus: { notIn: [...TERMINAL_CALL_STATUSES] },
   };
 
-  const [checkouts, totalCount] = await Promise.all([
-    db.abandonedCheckout.findMany({
-      where,
-      orderBy: [
-        { shopifyCreatedAt: { sort: "desc", nulls: "last" } },
-        { createdAt: "desc" },
-      ],
-      take: CHECKOUT_LIST_MAX_ROWS,
-      include: CHECKOUT_LIST_INCLUDE,
-    }),
-    db.abandonedCheckout.count({ where }),
-  ]);
+  const query = () =>
+    Promise.all([
+      db.abandonedCheckout.findMany({
+        where,
+        orderBy: [
+          { shopifyCreatedAt: { sort: "desc", nulls: "last" } },
+          { createdAt: "desc" },
+        ],
+        take: CHECKOUT_LIST_MAX_ROWS,
+        include: CHECKOUT_LIST_INCLUDE,
+      }),
+      db.abandonedCheckout.count({ where }),
+    ]);
+  const [checkouts, totalCount] = timing
+    ? await timing.measure("db-open-checkouts", query)
+    : await query();
+
+  const rows = timing
+    ? timing.measureSync("map-open-checkouts", () => checkouts.map(toRow))
+    : checkouts.map(toRow);
 
   return {
-    checkouts: checkouts.map(toRow),
+    checkouts: rows,
     totalCount,
   };
 }
 
-async function fetchCompletedCheckouts(storeDomain: string) {
-  const checkouts = await db.abandonedCheckout.findMany({
-    where: { storeDomain, callStatus: CallStatus.COMPLETED },
-    orderBy: [
-      { shopifyCreatedAt: { sort: "desc", nulls: "last" } },
-      { createdAt: "desc" },
-    ],
-    take: 200,
-    include: CHECKOUT_LIST_INCLUDE,
-  });
+async function fetchCompletedCheckouts(storeDomain: string, timing?: TimingLog) {
+  const query = () =>
+    db.abandonedCheckout.findMany({
+      where: { storeDomain, callStatus: CallStatus.COMPLETED },
+      orderBy: [
+        { shopifyCreatedAt: { sort: "desc", nulls: "last" } },
+        { createdAt: "desc" },
+      ],
+      take: 200,
+      include: CHECKOUT_LIST_INCLUDE,
+    });
+  const checkouts = timing
+    ? await timing.measure("db-completed-checkouts", query)
+    : await query();
 
-  return checkouts.map(toRow);
+  return timing
+    ? timing.measureSync("map-completed-checkouts", () => checkouts.map(toRow))
+    : checkouts.map(toRow);
 }
 
 export async function getAbandonedCheckoutsForStore(
   storeDomain: string
 ): Promise<CheckoutListResult> {
-  const { userId } = await auth();
-  if (!userId) {
-    return {
-      success: false,
-      checkouts: [],
-      totalCount: 0,
-      error: "Unauthorized",
-    };
-  }
+  const timing = startTiming("recovery-load");
+  try {
+    const { userId } = await timing.measure("auth", () => auth());
+    if (!userId) {
+      return {
+        success: false,
+        checkouts: [],
+        totalCount: 0,
+        error: "Unauthorized",
+        timings: timing.snapshot(),
+      };
+    }
 
-  const accessError = await guardStoreAccess(storeDomain);
-  if (accessError) {
-    return {
-      success: false,
-      checkouts: [],
-      totalCount: 0,
-      error: accessError,
-    };
-  }
+    const accessError = await timing.measure("access", () =>
+      guardStoreAccess(storeDomain),
+    );
+    if (accessError) {
+      return {
+        success: false,
+        checkouts: [],
+        totalCount: 0,
+        error: accessError,
+        timings: timing.snapshot(),
+      };
+    }
 
-  const store = await db.store.findUnique({ where: { storeDomain } });
-  if (!store) {
-    return {
-      success: false,
-      checkouts: [],
-      totalCount: 0,
-      error: "Store not found",
-    };
-  }
+    const store = await timing.measure("load-store", () =>
+      db.store.findUnique({ where: { storeDomain } }),
+    );
+    if (!store) {
+      return {
+        success: false,
+        checkouts: [],
+        totalCount: 0,
+        error: "Store not found",
+        timings: timing.snapshot(),
+      };
+    }
 
-  const [result, completedCheckouts] = await Promise.all([
-    fetchOpenCheckouts(storeDomain),
-    fetchCompletedCheckouts(storeDomain),
-  ]);
-  return { success: true, ...result, completedCheckouts };
+    const [result, completedCheckouts] = await Promise.all([
+      fetchOpenCheckouts(storeDomain, timing),
+      fetchCompletedCheckouts(storeDomain, timing),
+    ]);
+    return {
+      success: true,
+      ...result,
+      completedCheckouts,
+      timings: timing.snapshot(),
+    };
+  } finally {
+    timing.finish({ storeDomain });
+  }
 }
 
 async function applyAutoCallEnrollment(
@@ -389,19 +423,22 @@ async function dispatchDueAutoCalls(storeDomain: string, enabled: boolean) {
 
 export async function syncAbandonedCheckoutsForStore(
   store: NonNullable<Awaited<ReturnType<typeof db.store.findUnique>>>,
-  options: SyncOptions = {}
+  options: SyncOptions = {},
+  timing?: TimingLog,
 ): Promise<SyncResult> {
   const storeDomain = store.storeDomain;
 
   try {
     if (store.checkoutSyncMode === CheckoutSyncMode.SHEET) {
       const sheetPage = options.sheetPage ?? 0;
-      const sheetResult = await syncAbandonedCheckoutsFromSheet(store, {
-        page: sheetPage,
-      });
+      const sheetResult = await syncAbandonedCheckoutsFromSheet(
+        store,
+        { page: sheetPage },
+        timing,
+      );
       const [listResult, completedCheckouts] = await Promise.all([
-        fetchOpenCheckouts(storeDomain),
-        fetchCompletedCheckouts(storeDomain),
+        fetchOpenCheckouts(storeDomain, timing),
+        fetchCompletedCheckouts(storeDomain, timing),
       ]);
 
       console.info(
@@ -445,15 +482,22 @@ export async function syncAbandonedCheckoutsForStore(
     let warning: string | undefined;
 
     try {
-      const adminAuth = await resolveStoreAdminAccessToken(store);
-      const shopifyPage = await fetchShopifyAbandonedCheckouts(
-        storeDomain,
-        adminAuth.token,
-        {
-          first: ABANDONED_CHECKOUTS_PAGE_SIZE,
-          after: options.shopifyAfter,
-        }
-      );
+      const adminAuth = timing
+        ? await timing.measure("shopify-token", () =>
+            resolveStoreAdminAccessToken(store),
+          )
+        : await resolveStoreAdminAccessToken(store);
+      const shopifyPage = timing
+        ? await timing.measure("shopify-fetch", () =>
+            fetchShopifyAbandonedCheckouts(storeDomain, adminAuth.token, {
+              first: ABANDONED_CHECKOUTS_PAGE_SIZE,
+              after: options.shopifyAfter,
+            }),
+          )
+        : await fetchShopifyAbandonedCheckouts(storeDomain, adminAuth.token, {
+            first: ABANDONED_CHECKOUTS_PAGE_SIZE,
+            after: options.shopifyAfter,
+          });
       shopifyNodes = shopifyPage.nodes;
       shopifyPageInfo = shopifyPage.pageInfo;
       console.info(
@@ -490,6 +534,7 @@ export async function syncAbandonedCheckoutsForStore(
       }
     }
 
+    const upsertStarted = Date.now();
     for (const node of shopifyNodes) {
       const checkoutToken = checkoutTokenFromNode(node);
       const phone = extractCheckoutPhone(node);
@@ -572,10 +617,11 @@ export async function syncAbandonedCheckoutsForStore(
         });
       }
     }
+    timing?.add("shopify-upsert", Date.now() - upsertStarted);
 
     const [listResult, completedCheckouts] = await Promise.all([
-      fetchOpenCheckouts(storeDomain),
-      fetchCompletedCheckouts(storeDomain),
+      fetchOpenCheckouts(storeDomain, timing),
+      fetchCompletedCheckouts(storeDomain, timing),
     ]);
     const tokenCache = getCachedAdminTokenInfo(storeDomain);
 
@@ -607,42 +653,40 @@ export async function syncAbandonedCheckouts(
   storeDomain: string,
   options: SyncOptions = {}
 ): Promise<SyncResult> {
-  const { userId } = await auth();
-  if (!userId) {
-    return {
-      success: false,
-      checkouts: [],
-      syncedAt: new Date().toISOString(),
-      error: "Unauthorized",
-    };
-  }
+  const timing = startTiming("sync-now");
+  const failed = (error: string): SyncResult => ({
+    success: false,
+    checkouts: [],
+    syncedAt: new Date().toISOString(),
+    error,
+    timings: timing.snapshot(),
+  });
 
-  const accessError = await guardStoreAccess(storeDomain);
-  if (accessError) {
-    return {
-      success: false,
-      checkouts: [],
-      syncedAt: new Date().toISOString(),
-      error: accessError,
-    };
-  }
+  try {
+    const { userId } = await timing.measure("auth", () => auth());
+    if (!userId) return failed("Unauthorized");
 
-  const store = await db.store.findUnique({ where: { storeDomain } });
-  if (!store) {
-    return {
-      success: false,
-      checkouts: [],
-      syncedAt: new Date().toISOString(),
-      error: "Store not found",
-    };
-  }
+    const accessError = await timing.measure("access", () =>
+      guardStoreAccess(storeDomain),
+    );
+    if (accessError) return failed(accessError);
 
-  const result = await syncAbandonedCheckoutsForStore(store, options);
-  const autoCalls = await dispatchDueAutoCalls(
-    storeDomain,
-    store.autoCallsEnabled && result.success
-  );
-  return autoCalls ? { ...result, autoCalls } : result;
+    const store = await timing.measure("load-store", () =>
+      db.store.findUnique({ where: { storeDomain } }),
+    );
+    if (!store) return failed("Store not found");
+
+    const result = await syncAbandonedCheckoutsForStore(store, options, timing);
+    const autoCalls = await timing.measure("auto-calls", () =>
+      dispatchDueAutoCalls(storeDomain, store.autoCallsEnabled && result.success),
+    );
+    return {
+      ...(autoCalls ? { ...result, autoCalls } : result),
+      timings: timing.snapshot(),
+    };
+  } finally {
+    timing.finish({ storeDomain });
+  }
 }
 
 export async function fetchAbandonedCheckoutsForDate(
@@ -710,60 +754,121 @@ export async function initiateRecoveryCall(
   checkoutUrl?: string;
   draftOrderId?: string;
   dispatchDurationMs?: number;
+  timings?: TimingReport;
+  pipeline?: Array<{ step: string; status: string; ms: number | null }>;
 }> {
-  const { userId } = await auth();
-  if (!userId) {
-    return { success: false, error: "Unauthorized" };
+  const timing = startTiming("call-now");
+  let pipeline: Array<{ step: string; status: string; ms: number | null }> = [];
+  const extra: Record<string, unknown> = { checkoutId };
+  try {
+    const { userId } = await timing.measure("auth", () => auth());
+    if (!userId) {
+      return { success: false, error: "Unauthorized", timings: timing.snapshot() };
+    }
+
+    const checkout = await timing.measure("load-checkout", () =>
+      db.abandonedCheckout.findUnique({
+        where: { id: checkoutId },
+        include: { store: true },
+      }),
+    );
+
+    if (!checkout) {
+      return {
+        success: false,
+        error: "Checkout not found",
+        timings: timing.snapshot(),
+      };
+    }
+
+    const accessError = await timing.measure("access", () =>
+      guardStoreAccess(checkout.storeDomain),
+    );
+    if (accessError) {
+      return { success: false, error: accessError, timings: timing.snapshot() };
+    }
+
+    if (!isRetryableStatus(checkout.callStatus)) {
+      return {
+        success: false,
+        error: "Call cannot be retried for this checkout",
+        timings: timing.snapshot(),
+      };
+    }
+
+    if (checkout.callStatus !== CallStatus.PENDING) {
+      await timing.measure("reset-status", () =>
+        db.abandonedCheckout.update({
+          where: { id: checkoutId },
+          data: { callStatus: CallStatus.PENDING, lastError: null },
+        }),
+      );
+    }
+
+    const fresh = await timing.measure("reload-checkout", () =>
+      db.abandonedCheckout.findUnique({
+        where: { id: checkoutId },
+        include: { store: true },
+      }),
+    );
+
+    if (!fresh) {
+      return {
+        success: false,
+        error: "Checkout not found",
+        timings: timing.snapshot(),
+      };
+    }
+
+    const pipelineStartedAt = new Date();
+    const result = await timing.measure("pipeline", () =>
+      runRecoveryCallPipeline(fresh, "manual"),
+    );
+    try {
+      const events = await timing.measure("pipeline-events", () =>
+        db.callPipelineEvent.findMany({
+          where: {
+            checkoutId,
+            startedAt: { gte: pipelineStartedAt },
+            status: { not: "started" },
+          },
+          orderBy: { startedAt: "asc" },
+          select: { step: true, status: true, durationMs: true },
+        }),
+      );
+      pipeline = events.map((event) => ({
+        step: event.step,
+        status: event.status,
+        ms: event.durationMs,
+      }));
+    } catch (error) {
+      console.warn(
+        "[timing] call-now pipeline breakdown failed",
+        error instanceof Error ? error.message : error,
+      );
+    }
+    extra.success = result.success;
+    extra.skipped = result.skipped ?? false;
+    extra.pipeline = pipeline;
+
+    revalidatePath("/dashboard/analytics");
+    revalidatePath("/dashboard/billing");
+    revalidatePath("/dashboard/recovery");
+
+    return {
+      success: result.success,
+      error: result.error,
+      skipped: result.skipped,
+      skipReason: result.skipReason,
+      checkoutUrl: result.checkoutUrl,
+      draftOrderId: result.draftOrderId,
+      dispatchDurationMs: result.dispatchDurationMs,
+      timings: timing.snapshot(),
+      pipeline,
+    };
+  } finally {
+    timing.finish(extra);
   }
-
-  const checkout = await db.abandonedCheckout.findUnique({
-    where: { id: checkoutId },
-    include: { store: true },
-  });
-
-  if (!checkout) {
-    return { success: false, error: "Checkout not found" };
-  }
-
-  const accessError = await guardStoreAccess(checkout.storeDomain);
-  if (accessError) {
-    return { success: false, error: accessError };
-  }
-
-  if (!isRetryableStatus(checkout.callStatus)) {
-    return { success: false, error: "Call cannot be retried for this checkout" };
-  }
-
-  if (checkout.callStatus !== CallStatus.PENDING) {
-    await db.abandonedCheckout.update({
-      where: { id: checkoutId },
-      data: { callStatus: CallStatus.PENDING, lastError: null },
-    });
-  }
-
-  const fresh = await db.abandonedCheckout.findUnique({
-    where: { id: checkoutId },
-    include: { store: true },
-  });
-
-  if (!fresh) {
-    return { success: false, error: "Checkout not found" };
-  }
-
-  const result = await runRecoveryCallPipeline(fresh, "manual");
-  revalidatePath("/dashboard/analytics");
-  revalidatePath("/dashboard/billing");
-  revalidatePath("/dashboard/recovery");
-
-  return {
-    success: result.success,
-    error: result.error,
-    skipped: result.skipped,
-    skipReason: result.skipReason,
-    checkoutUrl: result.checkoutUrl,
-    draftOrderId: result.draftOrderId,
-    dispatchDurationMs: result.dispatchDurationMs,
-  };
 }
 
 const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;

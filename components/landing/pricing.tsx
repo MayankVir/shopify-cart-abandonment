@@ -1,105 +1,167 @@
-import { Check } from 'lucide-react';
-import Link from 'next/link';
+"use client";
+
+import { useState } from "react";
+import { Check } from "lucide-react";
+import Link from "next/link";
+import { motion } from "framer-motion";
+import { Reveal } from "@/components/landing/reveal";
+import { onAccentCtaClass, secondaryCtaClass } from "@/components/landing/styles";
+
+const regions = {
+  IN: {
+    label: "India",
+    prices: ["₹4,999", "₹9,999", "₹19,999"] as const,
+  },
+  OTHER: {
+    label: "Outside India",
+    prices: ["Custom", "Custom", "Custom"] as const,
+  },
+} as const;
+
+type RegionId = keyof typeof regions;
 
 const plans = [
   {
     name: "Starter",
-    price: "$49",
-    description: "Perfect for emerging stores testing AI recovery.",
+    body: "For a store trying voice on one problem.",
     features: [
-      "Up to 100 AI voice calls/mo",
-      "Real-time Shopify polling",
-      "Basic recovery analytics",
-      "Email support"
-    ]
+      "Cart recovery or RTO calling",
+      "Human-like voice",
+      "Live call analytics",
+      "Email support",
+    ],
+    popular: false,
   },
   {
     name: "Pro",
-    price: "$99",
-    description: "For high-volume stores maximizing revenue.",
-    popular: true,
+    body: "Cart recovery and RTO, with checkout connected.",
     features: [
-      "Up to 500 AI voice calls/mo",
-      "Instant checkout detection",
-      "Advanced ROI tracking",
-      "Custom AI voice scripts",
-      "Priority 24/7 support"
-    ]
+      "Cart recovery and RTO",
+      "GoKwik and checkout",
+      "Full live analytics",
+      "Priority support",
+    ],
+    popular: true,
   },
   {
     name: "Enterprise",
-    price: "Custom",
-    description: "Unlimited scale for Shopify Plus brands.",
+    body: "For brands that want the call written around their catalog.",
     features: [
-      "Unlimited AI voice calls",
-      "Dedicated account manager",
-      "Bring your own Twilio numbers",
-      "Custom integrations",
-      "White-glove onboarding"
-    ]
-  }
+      "Everything in Pro",
+      "Custom call scripts",
+      "Dedicated manager",
+      "Hands-on onboarding",
+    ],
+    popular: false,
+  },
 ];
 
 export function Pricing() {
-  return (
-    <section className="py-24 bg-black border-t border-white/5 relative z-10" id="pricing">
-      <div className="container mx-auto px-4 max-w-6xl">
-        <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">Simple, transparent pricing</h2>
-          <p className="text-gray-400 max-w-2xl mx-auto text-lg">
-            Stop losing sales. Our tool pays for itself within the first 3 recovered carts.
-          </p>
-        </div>
+  const [region, setRegion] = useState<RegionId>("IN");
+  const prices = regions[region].prices;
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {plans.map((plan) => (
-            <div 
-              key={plan.name} 
-              className={`relative rounded-2xl ring-1 ${
-                plan.popular 
-                  ? 'ring-indigo-500/50 bg-white/[0.04] shadow-2xl shadow-indigo-500/10' 
-                  : 'ring-white/10 bg-white/[0.02]'
-              } p-8 flex flex-col`}
-            >
-              {plan.popular && (
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2">
-                  <span className="bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider py-1 px-3 rounded-full">
-                    Most Popular
-                  </span>
-                </div>
+  return (
+    <section id="pricing" className="scroll-mt-24 border-t border-border px-4 py-16 md:py-28">
+      <div className="mx-auto w-full max-w-6xl">
+        <Reveal>
+          <div className="mx-auto max-w-2xl text-center">
+            <h2 className="text-3xl font-semibold tracking-tight text-foreground md:text-5xl">
+              Pricing for your country
+            </h2>
+            <p className="mt-4 text-base leading-relaxed text-muted-foreground">
+              India is priced in rupees. Other countries are quoted for the
+              same plans.
+            </p>
+            <div className="mx-auto mt-8 inline-flex rounded-full border border-border bg-muted p-1 shadow-sm shadow-black/[0.04] dark:shadow-none">
+              {(Object.entries(regions) as [RegionId, (typeof regions)[RegionId]][]).map(
+                ([id, item]) => {
+                  const selected = region === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setRegion(id)}
+                      className="relative rounded-full px-4 py-2 text-sm font-medium"
+                    >
+                      {selected ? (
+                        <motion.span
+                          layoutId="pricing-region"
+                          className="absolute inset-0 rounded-full bg-primary"
+                          transition={{ type: "spring", stiffness: 380, damping: 32 }}
+                        />
+                      ) : null}
+                      <span
+                        className={`relative ${selected ? "text-primary-foreground" : "text-muted-foreground"}`}
+                      >
+                        {item.label}
+                      </span>
+                    </button>
+                  );
+                }
               )}
-              
-              <div className="mb-6">
-                <h3 className="text-2xl font-bold text-white mb-2">{plan.name}</h3>
-                <p className="text-gray-400 text-sm h-10">{plan.description}</p>
-              </div>
-              
-              <div className="mb-6">
-                <span className="text-4xl font-bold text-white">{plan.price}</span>
-                {plan.price !== "Custom" && <span className="text-gray-500">/mo</span>}
-              </div>
-              
-              <ul className="space-y-4 mb-8 flex-1">
-                {plan.features.map((feature, i) => (
-                  <li key={i} className="flex items-start">
-                    <Check className="h-5 w-5 text-indigo-400 shrink-0 mr-3" />
-                    <span className="text-gray-300 text-sm">{feature}</span>
-                  </li>
-                ))}
-              </ul>
-              
-              <Link 
-                href="/sign-in" 
-                className={`w-full py-3 px-4 rounded-lg text-center font-medium transition-colors ${
-                  plan.popular 
-                    ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
-                    : 'bg-white/10 text-white hover:bg-white/20'
-                }`}
-              >
-                {plan.price === "Custom" ? "Contact Sales" : "Start Free Trial"}
-              </Link>
             </div>
-          ))}
+          </div>
+        </Reveal>
+
+        <div className="mt-12 grid items-stretch gap-4 md:grid-cols-3">
+          {plans.map((plan, index) => {
+            const amount = prices[index];
+            const cta = amount === "Custom" ? "Contact sales" : "Start trial";
+            return (
+              <article
+                key={plan.name}
+                className={
+                  plan.popular
+                    ? "flex flex-col rounded-2xl bg-primary p-6 text-primary-foreground shadow-sm shadow-primary/20 dark:shadow-none md:p-8"
+                    : "flex flex-col rounded-2xl border border-border bg-card p-6 text-foreground shadow-sm shadow-black/[0.04] dark:shadow-none md:p-8"
+                }
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-xl font-semibold">{plan.name}</h3>
+                  {plan.popular ? (
+                    <span className="rounded-full bg-primary-foreground/15 px-2.5 py-1 text-xs font-medium">
+                      Most popular
+                    </span>
+                  ) : null}
+                </div>
+                <p
+                  className={
+                    plan.popular
+                      ? "mt-2 text-sm text-primary-foreground/80"
+                      : "mt-2 text-sm text-muted-foreground"
+                  }
+                >
+                  {plan.body}
+                </p>
+                <p className="mt-6 text-4xl font-semibold tracking-tight">
+                  {amount}
+                  {amount !== "Custom" ? (
+                    <span className="text-base font-medium opacity-70">/mo</span>
+                  ) : null}
+                </p>
+                <Link
+                  href="/sign-in"
+                  className={
+                    plan.popular
+                      ? `${onAccentCtaClass} mt-6`
+                      : `${secondaryCtaClass} mt-6 w-full`
+                  }
+                >
+                  {cta}
+                </Link>
+                <ul className="mt-6 space-y-2.5 border-t border-current/10 pt-6">
+                  {plan.features.map((feature) => (
+                    <li key={feature} className="flex items-start gap-2.5 text-sm">
+                      <Check className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.5} />
+                      <span className={plan.popular ? "text-primary-foreground/90" : "text-muted-foreground"}>
+                        {feature}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            );
+          })}
         </div>
       </div>
     </section>

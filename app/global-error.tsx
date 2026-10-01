@@ -25,7 +25,7 @@ export default function GlobalError({
       <body className={`${fontSans.variable} min-h-screen font-sans antialiased`}>
         <ErrorFallback
           error={error}
-          title="RecoverAI needs a refresh"
+          title="Custello needs a refresh"
           description="The app hit an unexpected error. Refresh to start a clean session."
         />
       </body>

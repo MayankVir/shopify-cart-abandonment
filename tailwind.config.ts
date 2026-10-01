@@ -116,11 +116,22 @@ const config: Config = {
   				"0%": { transform: "translateX(0%)" },
   				"100%": { transform: "translateX(-100%)" },
   			},
+  			orbit: {
+  				"0%": {
+  					transform:
+  						"rotate(calc(var(--angle) * 1deg)) translateY(calc(var(--radius) * 1px)) rotate(calc(var(--angle) * -1deg))",
+  				},
+  				"100%": {
+  					transform:
+  						"rotate(calc(var(--angle) * 1deg + 360deg)) translateY(calc(var(--radius) * 1px)) rotate(calc((var(--angle) * -1deg) - 360deg))",
+  				},
+  			},
   		},
   		animation: {
   			"fade-in-up": "fade-in-up 0.5s ease-out forwards",
   			"blob": "blob 7s infinite",
   			"marquee": "marquee 35s linear infinite",
+  			orbit: "orbit calc(var(--duration) * 1s) linear infinite",
   		}
   	}
   },

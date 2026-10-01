@@ -1,36 +1,53 @@
+import { NumberTicker } from "@/components/landing/number-ticker";
+import { Reveal } from "@/components/landing/reveal";
+
+const stats = [
+  {
+    value: 56,
+    label: "Call pickup",
+    hint: "Of calls placed",
+    suffix: "%+",
+  },
+  {
+    value: 10,
+    label: "Cart conversion",
+    hint: "Of shoppers who answered",
+    suffix: "%+",
+  },
+  {
+    value: 5,
+    label: "Calls converted",
+    hint: "Of every call placed",
+    suffix: "%+",
+  },
+  { value: 800, label: "Carts recovered", suffix: "+" },
+];
+
 export function SocialProof() {
-  // A list of fake brand names or generic placeholders for the marquee
-  const brands = [
-    "TechGadgets",
-    "FitWear",
-    "BeautyCo",
-    "HomeEssentials",
-    "OutdoorGear",
-    "UrbanApparel",
-    "EcoLife",
-    "SmartKitchen",
-  ];
-
   return (
-    <section className="py-12 bg-black border-t border-white/5 overflow-hidden">
-      <div className="container mx-auto px-4 text-center mb-8">
-        <p className="text-sm font-medium text-gray-500 uppercase tracking-widest">
-          Trusted by 500+ high-volume Shopify stores
-        </p>
-      </div>
-      
-      <div className="relative flex max-w-[100vw] overflow-hidden">
-        {/* Gradient overlays to fade the edges */}
-        <div className="absolute top-0 bottom-0 left-0 w-32 bg-gradient-to-r from-black to-transparent z-10 pointer-events-none"></div>
-        <div className="absolute top-0 bottom-0 right-0 w-32 bg-gradient-to-l from-black to-transparent z-10 pointer-events-none"></div>
-
-        <div className="flex animate-marquee whitespace-nowrap">
-          {[...brands, ...brands, ...brands].map((brand, i) => (
-            <span key={i} className="mx-8 text-2xl font-bold text-gray-800">
-              {brand}
-            </span>
+    <section className="px-4 py-10 md:py-16">
+      <div className="mx-auto w-full max-w-6xl">
+        <Reveal>
+          <p className="text-center text-sm text-muted-foreground">
+            Last 7 days analytics from a Shark tank funded brand
+          </p>
+        </Reveal>
+        <dl className="mt-8 grid grid-cols-2 overflow-hidden rounded-2xl border border-border bg-card shadow-sm shadow-black/[0.04] dark:shadow-none md:grid-cols-4">
+          {stats.map((stat) => (
+            <div
+              key={stat.label}
+              className="border-b border-r border-border px-5 py-8 [&:nth-child(2n)]:border-r-0 [&:nth-child(n+3)]:border-b-0 md:[&:nth-child(2n)]:border-r md:[&:nth-child(4n)]:border-r-0 md:[&:nth-child(n+3)]:border-b-0"
+            >
+              <dt className="text-sm text-muted-foreground">{stat.label}</dt>
+              <dd className="mt-2 text-3xl font-semibold tracking-tight text-foreground md:text-4xl">
+                <NumberTicker value={stat.value} suffix={stat.suffix} />
+              </dd>
+              {"hint" in stat && stat.hint ? (
+                <p className="mt-2 text-xs text-muted-foreground">{stat.hint}</p>
+              ) : null}
+            </div>
           ))}
-        </div>
+        </dl>
       </div>
     </section>
   );

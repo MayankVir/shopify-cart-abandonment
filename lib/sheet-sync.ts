@@ -20,6 +20,7 @@ import { mergeIncomingUserContext } from "@/lib/user-context";
 import { supersedeRepeatCarts } from "@/lib/repeat-carts";
 import { parseSheetUrl, sheetGvizRangeUrl } from "@/lib/sheet-url";
 import { formatDateLabelInTimeZone } from "@/lib/utils";
+import type { TimingLog } from "@/lib/timing-log";
 import {
   SHEET_SYNC_DIRECTIONS,
   sheetRowRangeLabel,
@@ -999,7 +1000,8 @@ export async function syncAbandonedCheckoutsFromSheet(
     | "callWindowStartMinute"
     | "callWindowEndMinute"
   >,
-  options: { page?: number; pageSize?: number } = {}
+  options: { page?: number; pageSize?: number } = {},
+  timing?: TimingLog,
 ): Promise<SheetSyncResult> {
   if (!store.sheetUrl?.trim()) {
     throw new Error("Sheet URL is not configured for this store");
@@ -1012,29 +1014,46 @@ export async function syncAbandonedCheckoutsFromSheet(
       ? SHEET_SYNC_DIRECTIONS.TOP
       : SHEET_SYNC_DIRECTIONS.BOTTOM;
 
-  const totalDataRows = await fetchSheetDataRowCount(store.sheetUrl);
+  async function time<T>(step: string, run: () => T | Promise<T>): Promise<T> {
+    return timing ? timing.measure(step, run) : run();
+  }
 
-  const { csv, includesHeader } = await fetchSheetCsvPage(
-    store.sheetUrl,
-    page,
-    pageSize,
-    { direction: syncDirection, totalDataRows }
+  const totalDataRows = await time("sheet-row-count", () =>
+    fetchSheetDataRowCount(store.sheetUrl),
+  );
+
+  const { csv, includesHeader } = await time("sheet-csv", () =>
+    fetchSheetCsvPage(store.sheetUrl, page, pageSize, {
+      direction: syncDirection,
+      totalDataRows,
+    }),
   );
   const rawRowCount = countSheetDataRows(csv, includesHeader);
-  const rows = parseSheetCsv(csv, {
-    dataOnly: !includesHeader,
-    timeZone: callWindowFromStore(store).timeZone,
-  });
+  const rows = timing
+    ? timing.measureSync("sheet-parse", () =>
+        parseSheetCsv(csv, {
+          dataOnly: !includesHeader,
+          timeZone: callWindowFromStore(store).timeZone,
+        }),
+      )
+    : parseSheetCsv(csv, {
+        dataOnly: !includesHeader,
+        timeZone: callWindowFromStore(store).timeZone,
+      });
 
   const totalPages = Math.ceil(Math.max(totalDataRows, 1) / pageSize);
   const hasMore = page + 1 < totalPages && rawRowCount > 0;
 
-  const { synced, skipped } = await persistParsedSheetRows(store, rows);
+  const { synced, skipped } = await time("sheet-persist", () =>
+    persistParsedSheetRows(store, rows),
+  );
 
-  await db.store.update({
-    where: { storeDomain: store.storeDomain },
-    data: { lastSheetSyncAt: new Date() },
-  });
+  await time("sheet-touch", () =>
+    db.store.update({
+      where: { storeDomain: store.storeDomain },
+      data: { lastSheetSyncAt: new Date() },
+    }),
+  );
 
   return {
     synced,

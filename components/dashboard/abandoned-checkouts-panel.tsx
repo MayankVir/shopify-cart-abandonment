@@ -148,6 +148,20 @@ function matchesLastCallDate(
   return lastCallDateValue(checkout) === date;
 }
 
+function reportTiming(
+  scope: string,
+  startedAt: number,
+  timings?: { totalMs: number; steps: Array<{ step: string; ms: number }> },
+  pipeline?: Array<{ step: string; status: string; ms: number | null }>,
+) {
+  console.info(`[timing] ${scope}`, {
+    clientMs: Math.round(performance.now() - startedAt),
+    serverMs: timings?.totalMs,
+    steps: timings?.steps,
+    pipeline,
+  });
+}
+
 function lastCallDetail(checkout: AbandonedCheckoutRow): string | null {
   if (!checkout.latestAttempt || checkout.attemptCount <= 0) return null;
   const retryNumber = checkout.latestAttempt.retryNumber;
@@ -240,7 +254,9 @@ function CheckoutRow({
 
   function handleCallNow() {
     startCall(async () => {
+      const startedAt = performance.now();
       const result = await initiateRecoveryCall(checkout.id);
+      reportTiming("call-now", startedAt, result.timings, result.pipeline);
       if (result.skipped) {
         toast.info(result.skipReason ?? "Call skipped");
         onRefresh();
@@ -497,7 +513,9 @@ export function AbandonedCheckoutsPanel() {
       }
 
       try {
+        const startedAt = performance.now();
         const result = await getAbandonedCheckoutsForStore(selectedStoreDomain);
+        reportTiming("recovery-load", startedAt, result.timings);
         if (!result.success) return;
 
         setCheckouts(result.checkouts);
@@ -669,10 +687,12 @@ export function AbandonedCheckoutsPanel() {
       if (!selectedStoreDomain) return;
 
       startSync(async () => {
+        const startedAt = performance.now();
         const result = await syncAbandonedCheckouts(selectedStoreDomain, {
           shopifyAfter: options?.shopifyAfter,
           sheetPage: options?.sheetPage ?? 0,
         });
+        reportTiming("sync-now", startedAt, result.timings);
         if (!result.success) {
           toast.error(result.error ?? "Failed to sync checkouts", {
             duration: 12_000,
@@ -709,7 +729,9 @@ export function AbandonedCheckoutsPanel() {
   function handleDetailCall() {
     if (!detailCheckout) return;
     startDetailCall(async () => {
+      const startedAt = performance.now();
       const result = await initiateRecoveryCall(detailCheckout.id);
+      reportTiming("call-now", startedAt, result.timings, result.pipeline);
       if (result.skipped) {
         toast.info(result.skipReason ?? "Call skipped");
         void refreshOpenCheckouts({ silent: true });
