@@ -3,22 +3,33 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Reveal } from "@/components/landing/reveal";
+import { Phone, Plug, Store } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const steps = [
   {
-    title: "Something is at risk",
-    body: "A shopper leaves checkout, or a delivery looks likely to come back. Custello picks it up without a manual list.",
+    title: "Connect your Shopify",
+    body: "Link the store. Carts left at checkout and deliveries on the way come from there.",
+    imageLight: "/landing/how-shopify-light.jpg",
+    imageDark: "/landing/how-shopify.jpg",
+    alt: "Custello connected to a Shopify store",
+    icon: Store,
   },
   {
-    title: "A natural call goes out",
-    body: "The agent speaks like a store associate. It can offer a discount, answer a question, or confirm where to deliver.",
-    quote:
-      "“You left a few items in your cart. I can hold them and apply a discount if you want to finish today.”",
+    title: "Connect checkout",
+    body: "GoKwik, Shipflo, Shiprocket, or Shopify checkout directly. The call knows what was left behind.",
+    imageLight: "/landing/how-checkout-light.jpg",
+    imageDark: "/landing/how-checkout.jpg",
+    alt: "Checkout choices: GoKwik, Shipflo, Shiprocket, and Shopify checkout",
+    icon: Plug,
   },
   {
-    title: "The order is saved",
-    body: "A recovered cart is sent back to checkout. A confirmed delivery stays on the truck instead of returning to you.",
+    title: "Sync and start the calls",
+    body: "Once the store is in sync, Custello starts calling. No list to upload.",
+    imageLight: "/landing/how-sync-light.jpg",
+    imageDark: "/landing/how-sync.jpg",
+    alt: "Custello in sync, with calls starting for a cart and a delivery",
+    icon: Phone,
   },
 ];
 
@@ -43,87 +54,136 @@ export function HowItWorks() {
       className="scroll-mt-24 border-t border-border px-4 py-16 md:py-28"
     >
       <div className="mx-auto w-full max-w-6xl">
-        <Reveal>
-          <div className="mx-auto max-w-2xl text-center">
-            <h2 className="text-3xl font-semibold tracking-tight text-foreground md:text-5xl">
-              How Custello works
-            </h2>
-            <p className="mt-4 text-base leading-relaxed text-muted-foreground">
-              One voice agent for carts left behind and deliveries that would
-              otherwise return.
-            </p>
-          </div>
-        </Reveal>
+        <div className="mx-auto max-w-2xl space-y-4 pb-6 text-center">
+          <p className="font-mono text-sm font-medium uppercase tracking-wider text-primary">
+            How it works
+          </p>
+          <h2 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl md:text-5xl">
+            Connect the store. Then the calls start.
+          </h2>
+        </div>
 
-        <div className="mt-12 grid items-center gap-8 lg:grid-cols-2 lg:gap-12">
-          <div className="flex flex-col gap-2">
+        <div className="mx-auto mt-12 grid max-w-6xl items-center gap-10 lg:grid-cols-2">
+          <ol className="hidden lg:block">
             {steps.map((item, index) => {
               const selected = index === active;
+              const Icon = item.icon;
               return (
-                <button
-                  key={item.title}
-                  type="button"
-                  onClick={() => setActive(index)}
-                  className="relative rounded-2xl px-4 py-4 text-left transition-colors hover:bg-muted/50"
-                >
-                  {selected ? (
-                    <motion.span
-                      layoutId="how-step"
-                      className="absolute inset-0 rounded-2xl bg-muted"
-                      transition={{ type: "spring", stiffness: 320, damping: 32 }}
-                    />
-                  ) : null}
-                  <span className="relative block">
-                    <span className="mb-3 block h-0.5 overflow-hidden rounded-full bg-border">
-                      {selected && !reduce ? (
-                        <motion.span
-                          key={active}
-                          className="block h-full bg-primary"
-                          initial={{ width: "0%" }}
-                          animate={{ width: "100%" }}
-                          transition={{ duration: STEP_MS / 1000, ease: "linear" }}
-                        />
-                      ) : null}
-                    </span>
-                    <span className="text-lg font-semibold text-foreground">
-                      {item.title}
-                    </span>
+                <li key={item.title} className="relative mb-8 last:mb-0">
+                  <span
+                    aria-hidden="true"
+                    className="absolute bottom-0 left-0 top-0 w-0.5 overflow-hidden rounded-full bg-border"
+                  >
+                    {selected ? (
+                      <motion.span
+                        key={active}
+                        className="absolute left-0 top-0 w-full bg-primary"
+                        initial={reduce ? { height: "100%" } : { height: "0%" }}
+                        animate={{ height: "100%" }}
+                        transition={
+                          reduce
+                            ? { duration: 0 }
+                            : { duration: STEP_MS / 1000, ease: "linear" }
+                        }
+                      />
+                    ) : null}
                   </span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setActive(index)}
+                    aria-current={selected ? "step" : undefined}
+                    className="flex w-full items-start text-left"
+                  >
+                    <span className="mx-5 flex size-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                      <Icon className="size-5" strokeWidth={1.75} />
+                    </span>
+                    <span className="min-w-0 pt-1">
+                      <span className="block text-xl font-semibold text-foreground">
+                        {index + 1}. {item.title}
+                      </span>
+                      <span className="mt-2 block text-sm leading-relaxed text-muted-foreground">
+                        {item.body}
+                      </span>
+                    </span>
+                  </button>
+                </li>
               );
             })}
-          </div>
+          </ol>
 
-          <div className="relative min-h-[360px] overflow-hidden rounded-2xl border border-border bg-card shadow-sm shadow-black/[0.04] dark:shadow-none">
-            <div className="relative aspect-[4/3]">
-              <Image
-                src="/landing/pack-station.jpg"
-                alt="Merchant packing a folded garment into a shipping box"
-                fill
-                sizes="(min-width: 1024px) 480px, 100vw"
-                className="object-cover"
-              />
-            </div>
+          <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border border-border bg-card p-1 shadow-lg">
             <AnimatePresence mode="wait">
               <motion.div
                 key={step.title}
-                initial={reduce ? false : { y: 10 }}
-                animate={{ y: 0 }}
-                exit={reduce ? undefined : { y: -8 }}
-                transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-                className="p-6"
+                className="relative h-full w-full"
+                initial={reduce ? false : { opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reduce ? undefined : { opacity: 0, y: -12 }}
+                transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
               >
-                <p className="text-sm leading-relaxed text-muted-foreground">
-                  {step.body}
-                </p>
-                {step.quote ? (
-                  <p className="mt-4 text-base leading-relaxed text-foreground">
-                    {step.quote}
-                  </p>
-                ) : null}
+                <Image
+                  src={step.imageLight}
+                  alt={step.alt}
+                  fill
+                  sizes="(min-width: 1024px) 520px, 100vw"
+                  className="rounded-lg object-contain object-center dark:hidden"
+                />
+                <Image
+                  src={step.imageDark}
+                  alt={step.alt}
+                  fill
+                  sizes="(min-width: 1024px) 520px, 100vw"
+                  className="hidden rounded-lg object-contain object-center dark:block"
+                />
               </motion.div>
             </AnimatePresence>
           </div>
+
+          <ul className="flex snap-x snap-mandatory gap-6 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] lg:hidden [&::-webkit-scrollbar]:hidden">
+            {steps.map((item, index) => {
+              const selected = index === active;
+              return (
+                <li key={item.title} className="w-[min(16rem,75%)] shrink-0 snap-center">
+                  <button
+                    type="button"
+                    onClick={() => setActive(index)}
+                    aria-current={selected ? "step" : undefined}
+                    className="relative block h-full w-full pt-4 text-left"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-0 right-0 top-0 h-0.5 overflow-hidden rounded-full bg-border"
+                    >
+                      {selected ? (
+                        <motion.span
+                          key={`mobile-${active}`}
+                          className="absolute left-0 top-0 h-full bg-primary"
+                          initial={reduce ? { width: "100%" } : { width: "0%" }}
+                          animate={{ width: "100%" }}
+                          transition={
+                            reduce
+                              ? { duration: 0 }
+                              : { duration: STEP_MS / 1000, ease: "linear" }
+                          }
+                        />
+                      ) : null}
+                    </span>
+                    <span
+                      className={cn(
+                        "block text-lg font-semibold",
+                        selected ? "text-foreground" : "text-muted-foreground"
+                      )}
+                    >
+                      {index + 1}. {item.title}
+                    </span>
+                    <span className="mt-2 block text-sm leading-relaxed text-muted-foreground">
+                      {item.body}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       </div>
     </section>

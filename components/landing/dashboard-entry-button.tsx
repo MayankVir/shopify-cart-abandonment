@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
+import { TopLoaderLine } from "@/components/dashboard/page-spinner";
 import { navCtaClass } from "@/components/landing/styles";
 
 const DASHBOARD_HOME = "/dashboard/recovery";
@@ -20,6 +21,7 @@ export function DashboardEntryButton() {
       }}
       className={navCtaClass}
     >
+      {pending ? <TopLoaderLine /> : null}
       {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
       Go to Dashboard
     </button>

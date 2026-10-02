@@ -29,7 +29,7 @@ export function Hero() {
         <div className="relative z-10 mb-4 flex flex-wrap items-center justify-center gap-3">
           <Link
             href="/sign-in"
-            className="inline-flex h-12 items-center justify-center rounded-lg bg-primary px-8 text-base font-medium text-primary-foreground shadow-[0_0_40px_-12px_hsl(var(--primary))] transition-all hover:scale-105 hover:bg-primary/90 active:scale-95"
+            className="inline-flex h-12 items-center justify-center rounded-lg bg-primary px-8 text-base font-medium text-primary-foreground shadow-[0_0_40px_-12px_var(--primary)] transition-all hover:scale-105 hover:bg-primary/90 active:scale-95"
           >
             Start trial
           </Link>

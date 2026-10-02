@@ -1,17 +1,36 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
-import { Plus_Jakarta_Sans, Lora, IBM_Plex_Mono } from "next/font/google";
+import {
+  IBM_Plex_Mono,
+  Libre_Baskerville,
+  Lora,
+  Plus_Jakarta_Sans,
+  Poppins,
+} from "next/font/google";
 import { Providers } from "@/components/providers";
 import { clerkAppearance } from "@/lib/clerk-appearance";
+import { colorScheme, colorSchemeClass } from "@/lib/color-scheme";
 import "./globals.css";
 
-const fontSans = Plus_Jakarta_Sans({
+const fontJakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
   variable: "--font-sans",
 });
 
-const fontSerif = Lora({
+const fontLora = Lora({
   subsets: ["latin"],
+  variable: "--font-serif",
+});
+
+const fontPoppins = Poppins({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-sans",
+});
+
+const fontLibre = Libre_Baskerville({
+  subsets: ["latin"],
+  weight: ["400", "700"],
   variable: "--font-serif",
 });
 
@@ -20,6 +39,11 @@ const fontMono = IBM_Plex_Mono({
   weight: ["400", "500", "600", "700"],
   variable: "--font-mono",
 });
+
+const fontVariables =
+  colorScheme === "hearth"
+    ? `${fontPoppins.variable} ${fontLibre.variable} ${fontMono.variable}`
+    : `${fontJakarta.variable} ${fontLora.variable} ${fontMono.variable}`;
 
 export const metadata: Metadata = {
   title: "Custello",
@@ -34,10 +58,12 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider appearance={clerkAppearance}>
-      <html lang="en" suppressHydrationWarning>
-        <body
-          className={`${fontSans.variable} ${fontSerif.variable} ${fontMono.variable} min-h-screen`}
-        >
+      <html
+        lang="en"
+        className={colorSchemeClass[colorScheme]}
+        suppressHydrationWarning
+      >
+        <body className={`${fontVariables} min-h-screen antialiased`}>
           <Providers>{children}</Providers>
         </body>
       </html>

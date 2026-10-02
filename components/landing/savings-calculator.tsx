@@ -51,32 +51,33 @@ function SliderRow({
   );
 }
 
+const CART_RECOVERY = 0.06;
+const RETURNS_KEPT = 0.25;
+const RETURN_COST = 180;
+
 export function SavingsCalculator() {
   const [carts, setCarts] = useState(1000);
   const [returns, setReturns] = useState(300);
-  const [orderValue, setOrderValue] = useState(1499);
-  const [returnCost, setReturnCost] = useState(180);
-  const [recoveryRate, setRecoveryRate] = useState(6);
-  const [keptRate, setKeptRate] = useState(25);
+  const [orderValue, setOrderValue] = useState(1500);
 
   const result = useMemo(() => {
-    const recovered = carts * (recoveryRate / 100) * orderValue;
-    const kept = returns * (keptRate / 100) * returnCost;
+    const recovered = carts * CART_RECOVERY * orderValue;
+    const kept = returns * RETURNS_KEPT * RETURN_COST;
     return { recovered, kept, total: recovered + kept };
-  }, [carts, keptRate, orderValue, recoveryRate, returnCost, returns]);
+  }, [carts, orderValue, returns]);
 
   return (
     <section id="savings" className="scroll-mt-24 border-t border-border px-4 py-16 md:py-28">
       <style>{`
         .savings-range {
-          --track: hsl(var(--muted-foreground) / 0.22);
-          --thumb: hsl(var(--background));
+          --track: color-mix(in oklab, var(--muted-foreground) 22%, transparent);
+          --thumb: var(--background);
           background: transparent;
         }
         .savings-range::-webkit-slider-runnable-track {
           height: 6px;
           border-radius: 999px;
-          background: linear-gradient(to right, hsl(var(--primary)) var(--fill), var(--track) var(--fill));
+          background: linear-gradient(to right, var(--primary) var(--fill), var(--track) var(--fill));
         }
         .savings-range::-webkit-slider-thumb {
           -webkit-appearance: none;
@@ -85,7 +86,7 @@ export function SavingsCalculator() {
           width: 18px;
           margin-top: -6px;
           border-radius: 999px;
-          border: 2px solid hsl(var(--primary));
+          border: 2px solid var(--primary);
           background: var(--thumb);
           box-shadow: 0 1px 2px hsl(0 0% 0% / 0.25);
         }
@@ -98,13 +99,13 @@ export function SavingsCalculator() {
         .savings-range::-moz-range-progress {
           height: 6px;
           border-radius: 999px;
-          background: hsl(var(--primary));
+          background: var(--primary);
         }
         .savings-range::-moz-range-thumb {
           height: 18px;
           width: 18px;
           border-radius: 999px;
-          border: 2px solid hsl(var(--primary));
+          border: 2px solid var(--primary);
           background: var(--thumb);
         }
       `}</style>
@@ -126,7 +127,7 @@ export function SavingsCalculator() {
           <div className="p-6 md:p-8">
             <h3 className="text-xl font-semibold text-foreground">Your store</h3>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Match the sliders to a typical month. The result is an estimate.
+              Three numbers from a typical month.
             </p>
 
             <div className="mt-8 space-y-6">
@@ -149,53 +150,22 @@ export function SavingsCalculator() {
                 onChange={setReturns}
               />
               <SliderRow
-                label="Carts a call brings back"
-                value={recoveryRate}
-                min={1}
-                max={30}
-                step={1}
-                display={`${recoveryRate}%`}
-                onChange={setRecoveryRate}
+                label="Average order value"
+                value={orderValue}
+                min={300}
+                max={10000}
+                step={100}
+                display={inr(orderValue)}
+                onChange={setOrderValue}
               />
-              <SliderRow
-                label="Returns a call prevents"
-                value={keptRate}
-                min={5}
-                max={60}
-                step={1}
-                display={`${keptRate}%`}
-                onChange={setKeptRate}
-              />
-            </div>
-
-            <div className="mt-8 grid grid-cols-2 gap-3">
-              <label className="text-sm text-foreground">
-                Average order value
-                <input
-                  type="number"
-                  min={1}
-                  value={orderValue}
-                  onChange={(event) => setOrderValue(Number(event.target.value) || 0)}
-                  className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-3 text-sm"
-                />
-              </label>
-              <label className="text-sm text-foreground">
-                Cost of one return
-                <input
-                  type="number"
-                  min={0}
-                  value={returnCost}
-                  onChange={(event) => setReturnCost(Number(event.target.value) || 0)}
-                  className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-3 text-sm"
-                />
-              </label>
             </div>
           </div>
 
           <div className="border-t border-border bg-muted/40 p-6 md:border-l md:border-t-0 md:p-8">
             <h3 className="text-xl font-semibold text-foreground">With Custello</h3>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              What those calls are worth in a month, at the rates you set.
+            <p className="mt-3 text-4xl font-semibold tracking-tight text-foreground">
+              {inr(result.total)}
+              <span className="ml-1 text-base font-medium text-muted-foreground">/ month</span>
             </p>
 
             <div className="mt-8 overflow-hidden rounded-2xl border border-border bg-card">
@@ -221,9 +191,9 @@ export function SavingsCalculator() {
               </div>
             </div>
 
-            <p className="mt-6 text-sm text-muted-foreground">
-              Combined estimate{" "}
-              <span className="font-semibold text-foreground">{inr(result.total)}</span> / month
+            <p className="mt-6 text-xs leading-relaxed text-muted-foreground">
+              Assumes 6% of those carts come back, and 25% of likely returns
+              are kept at ₹180 each.
             </p>
           </div>
         </div>

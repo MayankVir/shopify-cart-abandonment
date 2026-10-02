@@ -42,6 +42,16 @@ export function FlickeringGrid({
   const containerRef = useRef<HTMLDivElement>(null);
   const isInViewRef = useRef(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [scheme, setScheme] = useState<"light" | "dark">("light");
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const read = () => setScheme(root.classList.contains("dark") ? "dark" : "light");
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
 
   const memoizedColor = useMemo(() => {
     const toRGBA = (value: string) => {
@@ -58,7 +68,7 @@ export function FlickeringGrid({
       return `rgba(${match[1]}, ${match[2]}, ${match[3]},`;
     };
     return toRGBA(color);
-  }, [color]);
+  }, [color, scheme]);
 
   const setupCanvas = useCallback(
     (canvas: HTMLCanvasElement, nextWidth: number, nextHeight: number) => {
@@ -81,15 +91,15 @@ export function FlickeringGrid({
           const resolvedSize =
             fontSize ??
             Math.min(
-              nextHeight * 0.72,
-              (nextWidth * 0.92) / Math.max(text.length * 0.58, 1)
+              nextHeight * 1.35,
+              (nextWidth * 1.02) / Math.max(text.length * 0.5, 1)
             );
           maskCtx.scale(dpr, dpr);
           maskCtx.fillStyle = "#fff";
           maskCtx.textAlign = "center";
-          maskCtx.textBaseline = "middle";
+          maskCtx.textBaseline = "alphabetic";
           maskCtx.font = `${fontWeight} ${resolvedSize}px ${getComputedStyle(document.body).fontFamily}`;
-          maskCtx.fillText(text, nextWidth / 2, nextHeight / 2);
+          maskCtx.fillText(text, nextWidth / 2, nextHeight * 0.96);
           const pixels = maskCtx.getImageData(
             0,
             0,

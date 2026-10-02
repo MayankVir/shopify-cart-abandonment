@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useRef } from "react";
+import { colorScheme } from "@/lib/color-scheme";
 import {
   motion,
   useReducedMotion,
@@ -17,26 +18,26 @@ export function HeroDashboard() {
     target: ref,
     offset: ["start 0.95", "center 0.55"],
   });
-  const rotateX = useSpring(useTransform(scrollYProgress, [0, 1], [8, 0]), {
+  const y = useSpring(useTransform(scrollYProgress, [0, 1], [12, 0]), {
     stiffness: 120,
     damping: 24,
     mass: 0.4,
   });
-  const scale = useSpring(useTransform(scrollYProgress, [0, 1], [0.96, 1]), {
-    stiffness: 120,
-    damping: 24,
-    mass: 0.4,
-  });
-  const y = useSpring(useTransform(scrollYProgress, [0, 1], [16, 0]), {
-    stiffness: 120,
-    damping: 24,
-    mass: 0.4,
-  });
+  const shots = {
+    violet: {
+      light: "/landing/hero-dashboard-light.jpg",
+      dark: "/landing/hero-dashboard-dark.jpg",
+    },
+    hearth: {
+      light: "/landing/hero-dashboard-hearth-light.jpg",
+      dark: "/landing/hero-dashboard-hearth-dark.jpg",
+    },
+  }[colorScheme];
 
   return (
     <div
       ref={ref}
-      className="relative mx-auto w-[95%] max-w-[76rem] pb-6 [perspective:1400px] md:pb-8"
+      className="relative mx-auto w-[95%] max-w-[76rem] pb-6 md:pb-8"
     >
       <div
         aria-hidden="true"
@@ -44,32 +45,25 @@ export function HeroDashboard() {
       />
       <motion.div
         className="relative z-10 overflow-hidden rounded-xl border border-border bg-card shadow-xl shadow-black/[0.08] dark:border-white/10 dark:shadow-2xl"
-        style={
-          reduce
-            ? undefined
-            : {
-                rotateX,
-                scale,
-                y,
-                transformOrigin: "center top",
-                transformStyle: "preserve-3d",
-              }
-        }
+        style={reduce ? undefined : { y }}
       >
         <div className="relative aspect-video w-full bg-card">
           <Image
-            src="/landing/hero-dashboard-light.jpg"
+            src={shots.light}
             alt="Custello analytics dashboard with call volume, minutes, and recovered carts"
             fill
             priority
-            sizes="(min-width: 1280px) 1152px, 92vw"
+            unoptimized
+            sizes="(min-width: 1280px) 1216px, 95vw"
             className="object-cover object-top dark:hidden"
           />
           <Image
-            src="/landing/hero-dashboard-dark.jpg"
+            src={shots.dark}
             alt="Custello analytics dashboard with call volume, minutes, and recovered carts"
             fill
-            sizes="(min-width: 1280px) 1152px, 92vw"
+            priority
+            unoptimized
+            sizes="(min-width: 1280px) 1216px, 95vw"
             className="hidden object-cover object-top dark:block"
           />
         </div>

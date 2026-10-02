@@ -1,20 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
   <style>
-    .mark { stroke: hsl(0 0% 94.1176%); }
+    .mark { stroke: hsl(0 0% 94%); }
     .dot { fill: hsl(257.6687 100% 68.0392%); }
     @media (prefers-color-scheme: light) {
-      .mark { stroke: hsl(0 0% 0%); }
-      .dot { fill: hsl(257.9412 100% 60%); }
+      .mark { stroke: hsl(0 0% 8%); }
+      .dot { fill: hsl(257.9412 100% 52%); }
     }
   </style>
   <path
     class="mark"
-    d="M 46.32 20.14 A 20 20 0 1 0 46.32 45.86"
-    stroke-width="7"
+    d="M23.4 9.1a9.4 9.4 0 1 0 .15 13.9"
+    stroke-width="4.2"
     stroke-linecap="round"
   />
-  <line class="mark" x1="24" y1="29.5" x2="24" y2="36.5" stroke-width="3.4" stroke-linecap="round" />
-  <line class="mark" x1="30" y1="25" x2="30" y2="41" stroke-width="3.4" stroke-linecap="round" />
-  <line class="mark" x1="36" y1="28" x2="36" y2="38" stroke-width="3.4" stroke-linecap="round" />
-  <circle class="dot" cx="52.7" cy="14.8" r="3.6" />
+  <circle class="dot" cx="25.4" cy="7.15" r="2.15" />
 </svg>

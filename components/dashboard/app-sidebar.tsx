@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { isNavItemActive, useNavPending } from "@/components/dashboard/nav-pending";
 import { Logo } from "@/components/logo";
+import { LogoMark } from "@/components/logo-mark";
 import { SidebarUser, type SidebarAccountSummary } from "@/components/dashboard/sidebar-user";
 import {
   Sidebar,
@@ -85,10 +86,7 @@ function SidebarBrandLink() {
     >
       <Link href="/dashboard/recovery" prefetch onClick={onClick}>
         <Logo className="group-data-[collapsible=icon]:hidden" />
-        <span className="hidden items-end text-sm font-black leading-none tracking-tight text-slate-900 group-data-[collapsible=icon]:inline-flex dark:text-white">
-          c
-          <span className="mb-[0.14em] ml-[0.06em] size-[0.2em] shrink-0 rounded-full bg-primary" />
-        </span>
+        <LogoMark className="hidden size-8 group-data-[collapsible=icon]:block" />
       </Link>
     </SidebarMenuButton>
   );

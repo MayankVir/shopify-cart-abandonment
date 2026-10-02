@@ -213,7 +213,7 @@ export function BorderBeam({
     width: size,
     offsetPath: `rect(0 auto auto 0 round ${size}px)`,
     background:
-      "linear-gradient(to left, hsl(var(--primary)), hsl(var(--primary) / 0.15), transparent)",
+      "linear-gradient(to left, var(--primary), color-mix(in oklab, var(--primary) 15%, transparent), transparent)",
   } as MotionStyle;
 
   return (

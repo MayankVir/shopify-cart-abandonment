@@ -1,5 +1,8 @@
 import type { Config } from "tailwindcss";
 
+const color = (token: string) =>
+  `color-mix(in oklab, var(${token}) calc(<alpha-value> * 100%), transparent)`;
+
 const config: Config = {
   darkMode: ["class"],
   content: [
@@ -11,57 +14,57 @@ const config: Config = {
   theme: {
   	extend: {
   		colors: {
-  			border: 'hsl(var(--border))',
-  			input: 'hsl(var(--input))',
-  			ring: 'hsl(var(--ring))',
-  			background: 'hsl(var(--background))',
-  			foreground: 'hsl(var(--foreground))',
+  			border: color("--border"),
+  			input: color("--input"),
+  			ring: color("--ring"),
+  			background: color("--background"),
+  			foreground: color("--foreground"),
   			primary: {
-  				DEFAULT: 'hsl(var(--primary))',
-  				foreground: 'hsl(var(--primary-foreground))'
+  				DEFAULT: color("--primary"),
+  				foreground: color("--primary-foreground"),
   			},
   			secondary: {
-  				DEFAULT: 'hsl(var(--secondary))',
-  				foreground: 'hsl(var(--secondary-foreground))'
+  				DEFAULT: color("--secondary"),
+  				foreground: color("--secondary-foreground"),
   			},
   			destructive: {
-  				DEFAULT: 'hsl(var(--destructive))',
-  				foreground: 'hsl(var(--destructive-foreground))'
+  				DEFAULT: color("--destructive"),
+  				foreground: color("--destructive-foreground"),
   			},
   			muted: {
-  				DEFAULT: 'hsl(var(--muted))',
-  				foreground: 'hsl(var(--muted-foreground))'
+  				DEFAULT: color("--muted"),
+  				foreground: color("--muted-foreground"),
   			},
   			accent: {
-  				DEFAULT: 'hsl(var(--accent))',
-  				foreground: 'hsl(var(--accent-foreground))'
+  				DEFAULT: color("--accent"),
+  				foreground: color("--accent-foreground"),
   			},
   			popover: {
-  				DEFAULT: 'hsl(var(--popover))',
-  				foreground: 'hsl(var(--popover-foreground))'
+  				DEFAULT: color("--popover"),
+  				foreground: color("--popover-foreground"),
   			},
   			card: {
-  				DEFAULT: 'hsl(var(--card))',
-  				foreground: 'hsl(var(--card-foreground))'
+  				DEFAULT: color("--card"),
+  				foreground: color("--card-foreground"),
   			},
   			sidebar: {
-  				DEFAULT: 'hsl(var(--sidebar-background))',
-  				foreground: 'hsl(var(--sidebar-foreground))',
-  				primary: 'hsl(var(--sidebar-primary))',
-  				'primary-foreground': 'hsl(var(--sidebar-primary-foreground))',
-  				accent: 'hsl(var(--sidebar-accent))',
-  				'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
-  				hover: 'hsl(var(--sidebar-hover))',
-  				border: 'hsl(var(--sidebar-border))',
-  				ring: 'hsl(var(--sidebar-ring))'
+  				DEFAULT: color("--sidebar-background"),
+  				foreground: color("--sidebar-foreground"),
+  				primary: color("--sidebar-primary"),
+  				"primary-foreground": color("--sidebar-primary-foreground"),
+  				accent: color("--sidebar-accent"),
+  				"accent-foreground": color("--sidebar-accent-foreground"),
+  				hover: color("--sidebar-hover"),
+  				border: color("--sidebar-border"),
+  				ring: color("--sidebar-ring"),
   			},
   			chart: {
-  				'1': 'hsl(var(--chart-1))',
-  				'2': 'hsl(var(--chart-2))',
-  				'3': 'hsl(var(--chart-3))',
-  				'4': 'hsl(var(--chart-4))',
-  				'5': 'hsl(var(--chart-5))'
-  			}
+  				"1": color("--chart-1"),
+  				"2": color("--chart-2"),
+  				"3": color("--chart-3"),
+  				"4": color("--chart-4"),
+  				"5": color("--chart-5"),
+  			},
   		},
   		borderRadius: {
   			xl: 'calc(var(--radius) + 4px)',
@@ -116,23 +119,38 @@ const config: Config = {
   				"0%": { transform: "translateX(0%)" },
   				"100%": { transform: "translateX(-100%)" },
   			},
-  			orbit: {
-  				"0%": {
-  					transform:
-  						"rotate(calc(var(--angle) * 1deg)) translateY(calc(var(--radius) * 1px)) rotate(calc(var(--angle) * -1deg))",
-  				},
-  				"100%": {
-  					transform:
-  						"rotate(calc(var(--angle) * 1deg + 360deg)) translateY(calc(var(--radius) * 1px)) rotate(calc((var(--angle) * -1deg) - 360deg))",
-  				},
-  			},
-  		},
-  		animation: {
-  			"fade-in-up": "fade-in-up 0.5s ease-out forwards",
-  			"blob": "blob 7s infinite",
-  			"marquee": "marquee 35s linear infinite",
-  			orbit: "orbit calc(var(--duration) * 1s) linear infinite",
-  		}
+			orbit: {
+				"0%": {
+					transform:
+						"rotate(calc(var(--angle) * 1deg)) translateY(calc(var(--radius) * 1px)) rotate(calc(var(--angle) * -1deg))",
+				},
+				"100%": {
+					transform:
+						"rotate(calc(var(--angle) * 1deg + 360deg)) translateY(calc(var(--radius) * 1px)) rotate(calc((var(--angle) * -1deg) - 360deg))",
+				},
+			},
+			ripple: {
+				"0%, 100%": { transform: "translate(-50%, -50%) scale(1)" },
+				"50%": { transform: "translate(-50%, -50%) scale(0.9)" },
+			},
+			"voice-bar": {
+				"0%, 100%": { transform: "scaleY(0.35)" },
+				"50%": { transform: "scaleY(1)" },
+			},
+			"line-draw": {
+				from: { strokeDashoffset: "1" },
+				to: { strokeDashoffset: "0" },
+			},
+		},
+		animation: {
+			"fade-in-up": "fade-in-up 0.5s ease-out forwards",
+			"blob": "blob 7s infinite",
+			"marquee": "marquee 35s linear infinite",
+			orbit: "orbit calc(var(--duration) * 1s) linear infinite",
+			ripple: "ripple 2s ease calc(var(--i, 0) * 0.2s) infinite",
+			"voice-bar": "voice-bar 1.1s ease-in-out infinite",
+			"line-draw": "line-draw 2.8s ease-in-out infinite alternate",
+		}
   	}
   },
   plugins: [require("tailwindcss-animate")],

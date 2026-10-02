@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { maybeScheduleTelephonyRetry } from "@/lib/call-queue";
 import { outcomeFromSession } from "@/lib/call-reconcile";
 import { writeCheckoutCallFeedback } from "@/lib/call-feedback-sheet";
+import { toBilledDurationSec } from "@/lib/billing/calculateUsage";
 import {
   buildSessionSummary,
   durationSecFromTtaiSession,
@@ -237,14 +238,15 @@ export async function POST(request: NextRequest) {
     const endedAt = sessionResult?.session?.completed_at
       ? new Date(sessionResult.session.completed_at)
       : new Date();
-    const durationSec =
+    const durationSec = toBilledDurationSec(
       durationSecFromTtaiSession(sessionResult?.session) ??
-      pickNumber(
-        dataForExtraction.duration_sec,
-        dataForExtraction.duration_seconds,
-        payload.duration_sec
-      ) ??
-      Math.round((endedAt.getTime() - ndrcAttempt.startedAt.getTime()) / 1000);
+        pickNumber(
+          dataForExtraction.duration_sec,
+          dataForExtraction.duration_seconds,
+          payload.duration_sec
+        ) ??
+        Math.round((endedAt.getTime() - ndrcAttempt.startedAt.getTime()) / 1000)
+    );
 
     await db.$transaction([
       db.ndrcCallAttempt.update({
@@ -465,14 +467,15 @@ export async function POST(request: NextRequest) {
     ? new Date(finalWebhookStore.sessionDetails.completed_at)
     : new Date();
   const resolvedEndedAt = Number.isNaN(endedAt.getTime()) ? new Date() : endedAt;
-  const durationSec =
+  const durationSec = toBilledDurationSec(
     durationSecFromTtaiSession(finalWebhookStore.sessionDetails) ??
-    pickNumber(
-      dataForExtraction.duration_sec,
-      dataForExtraction.duration_seconds,
-      payload.duration_sec
-    ) ??
-    Math.round((resolvedEndedAt.getTime() - attempt.startedAt.getTime()) / 1000);
+      pickNumber(
+        dataForExtraction.duration_sec,
+        dataForExtraction.duration_seconds,
+        payload.duration_sec
+      ) ??
+      Math.round((resolvedEndedAt.getTime() - attempt.startedAt.getTime()) / 1000)
+  );
 
   await db.$transaction([
     db.callAttempt.update({

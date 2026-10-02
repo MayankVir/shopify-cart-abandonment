@@ -82,7 +82,6 @@ export function SidebarUser({ account }: SidebarUserProps) {
     [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
     email.split("@")[0] ||
     "Account";
-  const username = user?.username ? `@${user.username}` : null;
 
   return (
     <SidebarMenu>
@@ -92,7 +91,7 @@ export function SidebarUser({ account }: SidebarUserProps) {
             href="/dashboard/billing"
             className="mb-2 flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-sidebar-accent"
           >
-            <span className="text-sidebar-foreground/70">Minutes left</span>
+            <span className="text-muted-foreground">Minutes left</span>
             <span className="font-semibold tabular-nums text-sidebar-foreground">
               {formatMinutes(minutes)}
             </span>
@@ -102,14 +101,22 @@ export function SidebarUser({ account }: SidebarUserProps) {
 
       <SidebarMenuItem>
         <div
-          className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 ${
+          className={`flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-hover ${
             collapsed ? "justify-center" : ""
           }`}
+          onClick={(event) => {
+            const trigger = event.currentTarget.querySelector("button");
+            if (!trigger || trigger.contains(event.target as Node)) return;
+            trigger.click();
+          }}
         >
           <UserButton
             afterSignOutUrl="/sign-in"
             appearance={{
               elements: {
+                rootBox: "!w-auto shrink-0",
+                userButtonBox: "!w-auto",
+                userButtonTrigger: "!w-auto",
                 avatarBox: "h-9 w-9",
               },
             }}
@@ -120,13 +127,8 @@ export function SidebarUser({ account }: SidebarUserProps) {
                 {name}
               </p>
               {email ? (
-                <p className="truncate text-xs text-sidebar-foreground/60">
+                <p className="truncate text-xs text-muted-foreground">
                   {email}
-                </p>
-              ) : null}
-              {username ? (
-                <p className="truncate text-[11px] text-sidebar-foreground/45">
-                  {username}
                 </p>
               ) : null}
             </div>
