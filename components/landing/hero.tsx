@@ -4,7 +4,7 @@ import { AnimatedGridPattern } from "@/components/ui/animated-grid-pattern";
 
 export function Hero() {
   return (
-    <section className="relative -mt-16 w-full">
+    <section className="relative -mt-16 w-full overflow-x-clip">
       <AnimatedGridPattern
         numSquares={28}
         maxOpacity={0.12}
