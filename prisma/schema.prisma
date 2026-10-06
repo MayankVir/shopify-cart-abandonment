@@ -26,12 +26,21 @@ enum TopUpStatus {
   CANCELLED
 }
 
+/// MEMBER is the default. STAFF can open Team and Drafts.
+enum MerchantRole {
+  MEMBER
+  STAFF
+}
+
 model Merchant {
   clerkUserId        String             @id
   email              String?
   dodoCustomerId     String?            @unique
   balanceMinutes     Decimal            @default(0) @db.Decimal(10, 2)
   freeMinutesGranted Boolean            @default(false)
+  role               MerchantRole       @default(MEMBER)
+  /** Set when a new account skips store connect. */
+  onboardingSkippedAt DateTime?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   stores             Store[]

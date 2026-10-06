@@ -7,7 +7,6 @@ import { AnalyticsDateRangeSelect } from "@/components/dashboard/analytics-date-
 import { TtaiTimeSeriesPanel } from "@/components/dashboard/ttai-time-series-panel";
 import { useStoreAnalytics } from "@/hooks/use-store-analytics";
 import { type AnalyticsDateRange } from "@/lib/analytics";
-import { useAnalyticsStore } from "@/store/use-analytics-store";
 import {
   getMerchantBillingOverview,
   getMerchantBillingSummary,
@@ -28,13 +27,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { formatMinutes } from "@/lib/analytics";
 import { InlineSpinner } from "@/components/dashboard/page-spinner";
+import { useSelectedStoreDomain } from "@/components/dashboard/stores-context";
 
 const PRESET_AMOUNTS = [10, 30, 50, 100];
 
 export function BillingPanel() {
   const searchParams = useSearchParams();
   const [dateRange, setDateRange] = useState<AnalyticsDateRange>("30d");
-  const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
+  const selectedStoreDomain = useSelectedStoreDomain();
   const { data, isLoading: isLoadingUsage } = useStoreAnalytics(dateRange);
   const [billing, setBilling] = useState<Awaited<
     ReturnType<typeof getMerchantBillingOverview>

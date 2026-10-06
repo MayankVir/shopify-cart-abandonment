@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptToken } from "@/lib/encryption";
 import { fetchShopProfile } from "@/lib/shopify-admin";
+import { rememberStoreCatalog } from "@/lib/shopify-catalog";
 import { ensureMerchantForUser } from "@/lib/billing";
+import { grantStaffRole } from "@/lib/merchant-access";
 import { normalizeStoreDomain } from "@/lib/store-domain";
 import {
   isStoreOwnedBySomeoneElse,
@@ -96,7 +98,7 @@ export async function GET(request: NextRequest) {
 
   await ensureMerchantForUser(oauthState.userId);
 
-  await db.store.upsert({
+  const savedStore = await db.store.upsert({
     where: { storeDomain },
     create: {
       storeDomain,
@@ -109,8 +111,14 @@ export async function GET(request: NextRequest) {
     },
   });
 
+  if (savedStore.clerkUserId === oauthState.userId) {
+    await grantStaffRole(oauthState.userId);
+  }
+
+  let shopCurrency: string | null = null;
   try {
     const profile = await fetchShopProfile(storeDomain, tokenData.access_token);
+    shopCurrency = profile.currency;
     await db.store.update({
       where: { storeDomain },
       data: {
@@ -122,6 +130,15 @@ export async function GET(request: NextRequest) {
     console.warn(
       "Could not fetch shop profile after OAuth connect:",
       nameError instanceof Error ? nameError.message : nameError
+    );
+  }
+
+  try {
+    await rememberStoreCatalog(storeDomain, tokenData.access_token, shopCurrency);
+  } catch (catalogError) {
+    console.warn(
+      "Could not save store catalog after OAuth connect:",
+      catalogError instanceof Error ? catalogError.message : catalogError
     );
   }
 

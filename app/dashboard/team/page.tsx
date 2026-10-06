@@ -1,6 +1,9 @@
 import { TeamPanel } from "@/components/dashboard/team-panel";
+import { requireTeamAndDrafts } from "@/lib/dashboard-access";
 
-export default function TeamPage() {
+export default async function TeamPage() {
+  await requireTeamAndDrafts();
+
   return (
     <div className="space-y-8">
       <div>

@@ -6,6 +6,7 @@ import {
   BarChart3,
   CreditCard,
   FileSpreadsheet,
+  Home,
   ScrollText,
   Settings,
   Shield,
@@ -16,7 +17,6 @@ import {
 } from "lucide-react";
 import { isNavItemActive, useNavPending } from "@/components/dashboard/nav-pending";
 import { Logo } from "@/components/logo";
-import { LogoMark } from "@/components/logo-mark";
 import { SidebarUser, type SidebarAccountSummary } from "@/components/dashboard/sidebar-user";
 import {
   Sidebar,
@@ -32,10 +32,14 @@ import {
   SidebarMenuItem,
   SidebarRail,
   SidebarSeparator,
+  useSidebar,
 } from "@/components/ui/sidebar";
 
 interface AppSidebarProps {
   showAdminLink?: boolean;
+  hasWorkspace?: boolean;
+  canSeeTeamAndDrafts?: boolean;
+  onboardingSkipped?: boolean;
   account: SidebarAccountSummary | null;
   pendingInviteCount?: number;
 }
@@ -50,7 +54,16 @@ const MAIN_NAV = [
 
 const SETUP_NAV = [
   { href: "/dashboard/onboarding", label: "Connect Store", icon: Settings },
+] as const;
+
+const LIMITED_NAV = [
+  { href: "/dashboard/welcome", label: "Home", icon: Home },
+  { href: "/dashboard/onboarding", label: "Connect Store", icon: Settings },
+] as const;
+
+const TEAM_NAV = [
   { href: "/dashboard/team", label: "Team", icon: Users },
+  { href: "/dashboard/drafts", label: "Drafts", icon: FileSpreadsheet },
 ] as const;
 
 function usePendingNavClick(href: string) {
@@ -74,19 +87,19 @@ function usePendingNavClick(href: string) {
   };
 }
 
-function SidebarBrandLink() {
-  const { onClick } = usePendingNavClick("/dashboard/recovery");
+function SidebarBrandLink({ href }: { href: string }) {
+  const { onClick } = usePendingNavClick(href);
+  const { state } = useSidebar();
 
   return (
     <SidebarMenuButton
       size="lg"
       asChild
       tooltip="Custello"
-      className="h-auto py-2"
+      className="sidebar-brand h-auto overflow-visible py-2"
     >
-      <Link href="/dashboard/recovery" prefetch onClick={onClick}>
-        <Logo className="group-data-[collapsible=icon]:hidden" />
-        <LogoMark className="hidden size-8 group-data-[collapsible=icon]:block" />
+      <Link href={href} prefetch onClick={onClick}>
+        <Logo mark={state === "collapsed"} />
       </Link>
     </SidebarMenuButton>
   );
@@ -141,61 +154,94 @@ function NavItems({
 
 export function AppSidebar({
   showAdminLink = false,
+  hasWorkspace = false,
+  canSeeTeamAndDrafts = false,
+  onboardingSkipped = false,
   account,
   pendingInviteCount = 0,
 }: AppSidebarProps) {
-  const setupBadges = pendingInviteCount > 0
-    ? { "/dashboard/team": pendingInviteCount }
-    : undefined;
+  const locked = !hasWorkspace && !showAdminLink;
+  const homeHref = locked
+    ? onboardingSkipped
+      ? "/dashboard/welcome"
+      : "/dashboard/onboarding"
+    : "/dashboard/recovery";
+  const inviteBadges =
+    pendingInviteCount > 0
+      ? {
+          "/dashboard/welcome": pendingInviteCount,
+          "/dashboard/team": pendingInviteCount,
+        }
+      : undefined;
 
   return (
     <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarBrandLink />
+            <SidebarBrandLink href={homeHref} />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Platform</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <NavItems items={MAIN_NAV} />
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>Setup</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <NavItems items={SETUP_NAV} badges={setupBadges} />
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {showAdminLink ? (
+        {locked ? (
           <SidebarGroup>
-            <SidebarGroupLabel>Administration</SidebarGroupLabel>
+            <SidebarGroupLabel>Get started</SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarNavLink
-                    href="/dashboard/admin"
-                    label="Admin"
-                    icon={Shield}
-                  />
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarNavLink
-                    href="/dashboard/drafts"
-                    label="Drafts"
-                    icon={FileSpreadsheet}
-                  />
-                </SidebarMenuItem>
-              </SidebarMenu>
+              <NavItems
+                items={
+                  onboardingSkipped
+                    ? LIMITED_NAV
+                    : LIMITED_NAV.filter((item) => item.href !== "/dashboard/welcome")
+                }
+                badges={inviteBadges}
+              />
             </SidebarGroupContent>
           </SidebarGroup>
-        ) : null}
+        ) : (
+          <>
+            <SidebarGroup>
+              <SidebarGroupLabel>Platform</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <NavItems items={MAIN_NAV} />
+              </SidebarGroupContent>
+            </SidebarGroup>
+
+            <SidebarGroup>
+              <SidebarGroupLabel>Setup</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <NavItems items={SETUP_NAV} />
+              </SidebarGroupContent>
+            </SidebarGroup>
+
+            {canSeeTeamAndDrafts ? (
+              <SidebarGroup>
+                <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <NavItems items={TEAM_NAV} badges={inviteBadges} />
+                </SidebarGroupContent>
+              </SidebarGroup>
+            ) : null}
+
+            {showAdminLink ? (
+              <SidebarGroup>
+                <SidebarGroupLabel>Administration</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <SidebarMenuItem>
+                      <SidebarNavLink
+                        href="/dashboard/admin"
+                        label="Admin"
+                        icon={Shield}
+                      />
+                    </SidebarMenuItem>
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            ) : null}
+          </>
+        )}
       </SidebarContent>
 
       <SidebarFooter>

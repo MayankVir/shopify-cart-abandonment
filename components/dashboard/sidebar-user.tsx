@@ -2,14 +2,21 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { UserButton, useUser } from "@clerk/nextjs";
+import { useClerk, useUser } from "@clerk/nextjs";
+import { LogOut, Settings, Loader2, UserRound } from "lucide-react";
 import { refreshMerchantCreditBalance } from "@/app/actions/billing";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   SidebarMenu,
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { Loader2 } from "lucide-react";
 
 export interface SidebarAccountSummary {
   creditBalanceMinutes: number;
@@ -30,6 +37,7 @@ function formatMinutes(value: number): string {
 
 export function SidebarUser({ account }: SidebarUserProps) {
   const { user, isLoaded } = useUser();
+  const { openUserProfile, signOut } = useClerk();
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
 
@@ -100,40 +108,61 @@ export function SidebarUser({ account }: SidebarUserProps) {
       ) : null}
 
       <SidebarMenuItem>
-        <div
-          className={`flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-hover ${
-            collapsed ? "justify-center" : ""
-          }`}
-          onClick={(event) => {
-            const trigger = event.currentTarget.querySelector("button");
-            if (!trigger || trigger.contains(event.target as Node)) return;
-            trigger.click();
-          }}
-        >
-          <UserButton
-            afterSignOutUrl="/sign-in"
-            appearance={{
-              elements: {
-                rootBox: "!w-auto shrink-0",
-                userButtonBox: "!w-auto",
-                userButtonTrigger: "!w-auto",
-                avatarBox: "h-9 w-9",
-              },
-            }}
-          />
-          {!collapsed ? (
-            <div className="min-w-0 flex-1 leading-tight">
-              <p className="truncate text-sm font-semibold text-sidebar-foreground">
-                {name}
-              </p>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className={`flex w-full items-center rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+                collapsed ? "justify-center" : ""
+              }`}
+            >
+              {collapsed ? (
+                <UserRound className="h-4 w-4 text-sidebar-foreground" />
+              ) : (
+                <span className="min-w-0 leading-tight">
+                  <span className="block break-words text-sm font-semibold text-sidebar-foreground">
+                    {name}
+                  </span>
+                  {email ? (
+                    <span className="mt-0.5 block break-all text-xs text-muted-foreground">
+                      {email}
+                    </span>
+                  ) : null}
+                </span>
+              )}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="top"
+            align="start"
+            sideOffset={8}
+            className="w-64 p-1.5"
+          >
+            <div className="px-2.5 py-2">
+              <p className="text-sm font-semibold leading-tight">{name}</p>
               {email ? (
-                <p className="truncate text-xs text-muted-foreground">
+                <p className="mt-1 break-all text-xs leading-snug text-muted-foreground">
                   {email}
                 </p>
               ) : null}
             </div>
-          ) : null}
-        </div>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="cursor-pointer"
+              onSelect={() => openUserProfile()}
+            >
+              <Settings />
+              Manage account
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="cursor-pointer"
+              onSelect={() => signOut({ redirectUrl: "/sign-in" })}
+            >
+              <LogOut />
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
   );

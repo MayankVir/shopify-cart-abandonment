@@ -105,6 +105,7 @@ const SHOP_NAME_QUERY = `
     shop {
       name
       ianaTimezone
+      currencyCode
     }
   }
 `;
@@ -112,7 +113,30 @@ const SHOP_NAME_QUERY = `
 export interface ShopProfile {
   name: string | null;
   ianaTimezone: string | null;
+  currency: string | null;
 }
+
+export interface ShopBestseller {
+  name: string;
+  price: string;
+  handle: string;
+}
+
+const BESTSELLERS_QUERY = `
+  query Bestsellers {
+    products(first: 5, sortKey: BEST_SELLING) {
+      nodes {
+        title
+        handle
+        variants(first: 1) {
+          nodes {
+            price
+          }
+        }
+      }
+    }
+  }
+`;
 
 const ABANDONED_CHECKOUTS_QUERY = `
   query AbandonedCheckouts($first: Int!, $after: String, $query: String) {
@@ -401,13 +425,43 @@ export async function fetchShopProfile(
   adminAccessToken: string
 ): Promise<ShopProfile> {
   const data = await adminGraphql<{
-    shop: { name: string | null; ianaTimezone: string | null };
+    shop: { name: string | null; ianaTimezone: string | null; currencyCode: string | null };
   }>(storeDomain, adminAccessToken, SHOP_NAME_QUERY);
 
   return {
     name: data.shop.name?.trim() || null,
     ianaTimezone: data.shop.ianaTimezone?.trim() || null,
+    currency: data.shop.currencyCode?.trim() || null,
   };
+}
+
+/** Top sellers for the voice agent. Kept off the shop profile query so a missing read_products scope does not block connect. */
+export async function fetchShopBestsellers(
+  storeDomain: string,
+  adminAccessToken: string,
+  currency: string | null
+): Promise<ShopBestseller[]> {
+  const data = await adminGraphql<{
+    products: {
+      nodes: Array<{
+        title: string | null;
+        handle: string | null;
+        variants: { nodes: Array<{ price: string | null }> };
+      }>;
+    };
+  }>(storeDomain, adminAccessToken, BESTSELLERS_QUERY);
+
+  return data.products.nodes
+    .map((product) => {
+      const name = product.title?.trim() || "";
+      const handle = product.handle?.trim() || "";
+      const amount = product.variants.nodes[0]?.price?.trim() || "";
+      if (!name || !handle) return null;
+      const price = amount && currency ? `${currency} ${amount}` : amount;
+      return { name, price, handle };
+    })
+    .filter((item): item is ShopBestseller => item !== null)
+    .slice(0, 5);
 }
 
 /** Merchant-facing shop display name (e.g. "Acme Store"), not the *.myshopify.com handle. */

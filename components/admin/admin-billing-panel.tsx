@@ -8,6 +8,7 @@ import {
   adminGrantExtraMinutes,
   adminListCreditGrants,
   adminSearchMerchants,
+  adminSetMerchantRole,
   adminUpdateBillingConfig,
 } from "@/app/actions/admin-billing";
 import { Button } from "@/components/ui/button";
@@ -139,6 +140,26 @@ export function AdminGrantMinutes() {
     });
   }
 
+  function handleRole(clerkUserId: string, role: "MEMBER" | "STAFF") {
+    startTransition(async () => {
+      const result = await adminSetMerchantRole(clerkUserId, role);
+      if (!result.success) {
+        toast.error(result.error ?? "Could not update access");
+        return;
+      }
+      setResults((current) =>
+        current.map((merchant) =>
+          merchant.clerkUserId === clerkUserId ? { ...merchant, role } : merchant
+        )
+      );
+      toast.success(
+        role === "STAFF"
+          ? "Team and Drafts are now visible for this account"
+          : "Team and Drafts are hidden for this account"
+      );
+    });
+  }
+
   function handleGrant() {
     if (!selectedUserId) {
       toast.error("Select a merchant first");
@@ -189,6 +210,7 @@ export function AdminGrantMinutes() {
                   <TableHead>Email</TableHead>
                   <TableHead>Stores</TableHead>
                   <TableHead>Balance (min)</TableHead>
+                  <TableHead>Team & Drafts</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -199,6 +221,25 @@ export function AdminGrantMinutes() {
                     <TableCell>{merchant.storeCount}</TableCell>
                     <TableCell>
                       {merchant.creditBalanceMinutes ?? "—"}
+                    </TableCell>
+                    <TableCell>
+                      {merchant.storeCount > 0 ? (
+                        <span className="text-xs text-muted-foreground">Owner</span>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={isPending}
+                          onClick={() =>
+                            handleRole(
+                              merchant.clerkUserId,
+                              merchant.role === "STAFF" ? "MEMBER" : "STAFF"
+                            )
+                          }
+                        >
+                          {merchant.role === "STAFF" ? "Remove staff" : "Grant staff"}
+                        </Button>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Button

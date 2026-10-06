@@ -75,6 +75,7 @@ export async function adminSearchMerchants(query: string) {
     merchants.map(async (merchant) => ({
       clerkUserId: merchant.clerkUserId,
       email: merchant.email,
+      role: merchant.role,
       storeCount: merchant._count.stores,
       creditBalanceMinutes: await getMerchantCreditBalanceMinutes(
         merchant.clerkUserId
@@ -83,6 +84,24 @@ export async function adminSearchMerchants(query: string) {
   );
 
   return results;
+}
+
+export async function adminSetMerchantRole(
+  clerkUserId: string,
+  role: "MEMBER" | "STAFF"
+): Promise<AdminActionResult> {
+  await requireAdmin();
+  if (!clerkUserId.trim()) {
+    return { success: false, error: "Merchant is required" };
+  }
+
+  await db.merchant.update({
+    where: { clerkUserId },
+    data: { role },
+  });
+
+  revalidatePath("/dashboard", "layout");
+  return { success: true };
 }
 
 export async function adminGrantExtraMinutes(data: {

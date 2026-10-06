@@ -6,7 +6,7 @@ import {
   type StoreAnalyticsView,
 } from "@/app/actions/analytics";
 import { type AnalyticsDateRange } from "@/lib/analytics";
-import { useAnalyticsStore } from "@/store/use-analytics-store";
+import { useSelectedStoreDomain } from "@/components/dashboard/stores-context";
 
 const EMPTY_VIEW: StoreAnalyticsView = {
   source: "local",
@@ -23,7 +23,7 @@ const EMPTY_VIEW: StoreAnalyticsView = {
 };
 
 export function useStoreAnalytics(dateRange: AnalyticsDateRange = "30d") {
-  const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
+  const selectedStoreDomain = useSelectedStoreDomain();
   const [data, setData] = useState<StoreAnalyticsView>(EMPTY_VIEW);
   const [isLoading, setIsLoading] = useState(false);
 

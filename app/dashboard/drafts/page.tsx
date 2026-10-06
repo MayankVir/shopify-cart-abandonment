@@ -1,8 +1,8 @@
-import { requireAdmin } from "@/lib/admin-gate";
 import { DraftSheetPanel } from "@/components/dashboard/draft-sheet-panel";
+import { requireTeamAndDrafts } from "@/lib/dashboard-access";
 
 export default async function DraftsPage() {
-  await requireAdmin();
+  await requireTeamAndDrafts();
   return (
     <div className="space-y-8">
       <div>

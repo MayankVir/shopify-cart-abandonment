@@ -9,7 +9,6 @@ import {
   type IntegrationEventDirection,
   type IntegrationEventRow,
 } from "@/app/actions/integration-events";
-import { useAnalyticsStore } from "@/store/use-analytics-store";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -31,6 +30,7 @@ import {
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import type { BadgeVariant } from "@/lib/call-status";
 import { formatDateTimeLabel } from "@/lib/utils";
+import { useSelectedStoreDomain } from "@/components/dashboard/stores-context";
 
 const PAGE_SIZE = 50;
 const ALL_OUTCOMES = "all";
@@ -80,7 +80,7 @@ function formatBytes(bytes: number): string {
 }
 
 export function IntegrationLogsPanel() {
-  const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
+  const selectedStoreDomain = useSelectedStoreDomain();
 
   const [events, setEvents] = useState<IntegrationEventRow[]>([]);
   const [hasMore, setHasMore] = useState(false);

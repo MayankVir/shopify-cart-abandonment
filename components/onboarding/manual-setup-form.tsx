@@ -9,6 +9,7 @@ import {
   getStoreDomainsForManualSetup,
   getManualStoreConfig,
 } from "@/app/actions/store";
+import { SHOPIFY_OAUTH_SCOPES } from "@/lib/shopify-scopes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
@@ -223,6 +224,10 @@ export function ManualSetupForm({ initialStoreDomain }: ManualSetupFormProps) {
                 automatically (short-lived, cached on the server). For{" "}
                 <strong>Settings → Notifications</strong> webhooks, webhook HMAC may use a
                 different signing key at the bottom of that page.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Enable these Admin API scopes on the custom app:{" "}
+                {SHOPIFY_OAUTH_SCOPES.join(", ")}.
               </p>
             </div>
             <div className="space-y-2">

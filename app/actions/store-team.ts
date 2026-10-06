@@ -21,7 +21,8 @@ function normalizeEmail(email: string): string {
 
 function revalidateTeamPaths() {
   revalidatePath("/dashboard/team");
-  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/welcome");
+  revalidatePath("/dashboard", "layout");
 }
 
 export interface StoreTeamMemberRow {

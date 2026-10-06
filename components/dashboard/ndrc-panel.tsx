@@ -27,7 +27,6 @@ import {
   formatCallStatus,
   isActiveCall,
 } from "@/lib/call-status";
-import { useAnalyticsStore } from "@/store/use-analytics-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -47,6 +46,7 @@ import {
 } from "@/components/dashboard/ndrc-settings";
 import { TtaiCallDetails } from "@/components/dashboard/ttai-call-details";
 import { formatCurrency, formatPhoneNumber } from "@/lib/utils";
+import { useSelectedStoreDomain } from "@/components/dashboard/stores-context";
 
 function OrderDetail({
   order,
@@ -226,7 +226,7 @@ function NdrcOrderRowItem({
 }
 
 export function NdrcPanel() {
-  const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
+  const selectedStoreDomain = useSelectedStoreDomain();
   const [orders, setOrders] = useState<NdrcOrderRow[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [isSyncing, startSync] = useTransition();

@@ -1,9 +1,13 @@
+import { headers } from "next/headers";
 import { getStoresForDashboard } from "@/app/actions/store";
 import { getMerchantBillingSummary } from "@/app/actions/billing";
-import { getPendingInviteCountForMe } from "@/app/actions/store-team";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import { isAdminEmail } from "@/lib/admin-gate";
 import { getAuthState, getSignedInEmail } from "@/lib/clerk-user";
+import {
+  enforceDashboardPath,
+  getDashboardAccess,
+} from "@/lib/dashboard-access";
 import { buildSidebarAccountSummary } from "@/lib/sidebar-account";
 
 export default async function DashboardLayout({
@@ -13,9 +17,13 @@ export default async function DashboardLayout({
 }) {
   const { userId } = await getAuthState();
   const email = userId ? await getSignedInEmail() : null;
-  const stores = await getStoresForDashboard();
-  const pendingInviteCount = userId ? await getPendingInviteCountForMe() : 0;
+  const access = userId ? await getDashboardAccess() : null;
+  const pathname = headers().get("x-pathname");
+  if (access && pathname) {
+    enforceDashboardPath(pathname, access);
+  }
 
+  const stores = await getStoresForDashboard();
   const billing = userId ? await getMerchantBillingSummary() : null;
   const account = billing
     ? buildSidebarAccountSummary({
@@ -31,9 +39,12 @@ export default async function DashboardLayout({
   return (
     <DashboardShell
       stores={stores}
-      showAdminLink={isAdminEmail(email)}
+      showAdminLink={access?.isPlatformAdmin ?? isAdminEmail(email)}
+      hasWorkspace={access?.hasWorkspace ?? false}
+      canSeeTeamAndDrafts={access?.canSeeTeamAndDrafts ?? false}
+      onboardingSkipped={access?.onboardingSkipped ?? false}
       account={account}
-      pendingInviteCount={pendingInviteCount}
+      pendingInviteCount={access?.pendingInviteCount ?? 0}
     >
       {children}
     </DashboardShell>

@@ -16,7 +16,7 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         tertiary: "bg-accent text-accent-foreground hover:bg-accent/80",
         outline:
-          "border border-accent-foreground/15 bg-accent text-accent-foreground hover:border-secondary-foreground/20 hover:bg-secondary hover:text-secondary-foreground",
+          "border border-accent-foreground/15 bg-accent text-accent-foreground hover:border-accent-foreground/30 hover:bg-[color-mix(in_oklab,var(--accent)_93%,var(--accent-foreground))]",
         ghost: "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
       },

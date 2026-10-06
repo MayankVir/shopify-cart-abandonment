@@ -17,6 +17,7 @@ import { PRE_CALL_FAILURE_STATUSES } from "@/lib/call-status";
 import { buildSipDynamicVars, cancelSipCall, dispatchSipCall } from "@/lib/ttai";
 import { getRepeatCustomerInfo } from "@/lib/shopify-repeat-customer";
 import { findOrderPlacedAfter } from "@/lib/shopify-order-check";
+import { catalogAgentNote } from "@/lib/shopify-catalog";
 import { formatDateTimeLabel } from "@/lib/utils";
 import { hasBillableMinutes } from "@/lib/billing";
 import { sanitizeRecoveryError } from "@/lib/recovery-error";
@@ -525,7 +526,10 @@ export async function runRecoveryCallPipeline(
     shippingAddress: sheetCtx.shippingAddress,
     voiceGreeting: checkout.store.voiceGreeting || undefined,
     voiceDiscountOffer: checkout.store.voiceDiscountOffer || undefined,
-    voiceInstructions: checkout.store.voiceInstructions || undefined,
+    voiceInstructions: [checkout.store.voiceInstructions, catalogAgentNote(checkout.store.voicePromptJson)]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join("\n\n") || undefined,
     isRepeatCustomer,
   });
 

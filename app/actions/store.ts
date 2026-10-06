@@ -24,6 +24,8 @@ import {
   mergeAlternateShopDomains,
   normalizeStoreDomain,
 } from "@/lib/store-domain";
+import { rememberStoreCatalog } from "@/lib/shopify-catalog";
+import { shopifyOAuthScopeString } from "@/lib/shopify-scopes";
 import {
   fetchShopMyshopifyAliases,
   fetchShopProfile,
@@ -33,6 +35,7 @@ import {
   resolveAdminAccessTokenFromPlainCredentials,
 } from "@/lib/shopify-admin-token";
 import { ensureMerchantForUser } from "@/lib/billing";
+import { grantStaffRole } from "@/lib/merchant-access";
 import {
   assertStoreAccess,
   getStoresForUser,
@@ -175,10 +178,12 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
 
     let shopName: string | null = null;
     let ianaTimezone: string | null = null;
+    let shopCurrency: string | null = null;
     try {
       const profile = await fetchShopProfile(storeDomain, adminTokenForApi);
       shopName = profile.name;
       ianaTimezone = profile.ianaTimezone;
+      shopCurrency = profile.currency;
     } catch (nameError) {
       console.warn(
         "Could not auto-fetch shop profile:",
@@ -192,7 +197,7 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
 
     await ensureMerchantForUser(userId);
 
-    await db.store.upsert({
+    const savedStore = await db.store.upsert({
       where: { storeDomain },
       create: {
         storeDomain,
@@ -217,6 +222,19 @@ export async function saveManualStoreConfig(formData: FormData): Promise<StoreAc
           : {}),
       },
     });
+
+    if (savedStore.clerkUserId === userId) {
+      await grantStaffRole(userId);
+    }
+
+    try {
+      await rememberStoreCatalog(storeDomain, adminTokenForApi, shopCurrency);
+    } catch (catalogError) {
+      console.warn(
+        "Could not save store catalog:",
+        catalogError instanceof Error ? catalogError.message : catalogError
+      );
+    }
 
     const access = await verifyStoreAdminAccess(storeDomain, adminTokenForApi);
     if (!access.ok) {
@@ -262,7 +280,7 @@ export async function initiateOAuthConnect(
 
   const apiKey = process.env.SHOPIFY_API_KEY;
   const appUrl = process.env.SHOPIFY_APP_URL ?? "http://localhost:3000";
-  const scopes = process.env.SHOPIFY_SCOPES ?? "read_orders,read_customers,read_checkouts,write_checkouts";
+  const scopes = shopifyOAuthScopeString();
 
   if (!apiKey) {
     return {

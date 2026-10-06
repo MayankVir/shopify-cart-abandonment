@@ -2,10 +2,11 @@
 
 import { useMemo } from "react";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
+import { useSelectedStoreDomain } from "@/components/dashboard/stores-context";
 
 export function useFilteredCallLogs() {
   const callLogs = useAnalyticsStore((s) => s.callLogs);
-  const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
+  const selectedStoreDomain = useSelectedStoreDomain();
 
   return useMemo(
     () =>

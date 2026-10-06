@@ -9,15 +9,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useSelectedStoreDomain } from "@/components/dashboard/stores-context";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
 import { cn } from "@/lib/utils";
 
+interface StoreOption {
+  storeDomain: string;
+  name?: string | null;
+}
+
 interface StoreSelectorProps {
-  stores: Array<{ storeDomain: string }>;
+  stores: StoreOption[];
   className?: string;
 }
 
-function storeDisplayName(domain: string): string {
+function storeLabel(store: StoreOption | undefined): string {
+  const name = store?.name?.trim();
+  if (name) return name;
+  const domain = store?.storeDomain ?? "";
   return domain.replace(/\.myshopify\.com$/i, "") || domain;
 }
 
@@ -25,12 +34,15 @@ const shell =
   "h-9 w-auto max-w-[min(100vw-8rem,18rem)] gap-2 rounded-md border-border/70 bg-muted/30 px-2.5 text-sm shadow-none hover:bg-muted/45 focus:ring-1 focus:ring-ring";
 
 export function StoreSelector({ stores, className }: StoreSelectorProps) {
-  const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
+  const selectedStoreDomain = useSelectedStoreDomain();
   const setSelectedStoreDomain = useAnalyticsStore(
     (s) => s.setSelectedStoreDomain,
   );
 
   const activeDomain = selectedStoreDomain ?? stores[0]?.storeDomain ?? "";
+  const activeStore =
+    stores.find((store) => store.storeDomain === activeDomain) ?? stores[0];
+  const activeLabel = storeLabel(activeStore);
 
   if (stores.length === 0) {
     return (
@@ -62,12 +74,10 @@ export function StoreSelector({ stores, className }: StoreSelectorProps) {
           "inline-flex h-9 max-w-[min(100vw-8rem,18rem)] items-center gap-2 rounded-md border border-border/70 bg-muted/30 px-2.5 text-sm",
           className,
         )}
-        title={activeDomain}
+        title={activeLabel}
       >
         {prefix}
-        <span className="truncate font-medium">
-          {storeDisplayName(activeDomain)}
-        </span>
+        <span className="truncate font-medium">{activeLabel}</span>
       </div>
     );
   }
@@ -83,12 +93,12 @@ export function StoreSelector({ stores, className }: StoreSelectorProps) {
         aria-label="Switch store"
       >
         {prefix}
-        <SelectValue placeholder="Select store" />
+        <SelectValue placeholder="Select store">{activeLabel}</SelectValue>
       </SelectTrigger>
       <SelectContent align="start">
         {stores.map((store) => (
           <SelectItem key={store.storeDomain} value={store.storeDomain}>
-            {storeDisplayName(store.storeDomain)}
+            {storeLabel(store)}
           </SelectItem>
         ))}
       </SelectContent>

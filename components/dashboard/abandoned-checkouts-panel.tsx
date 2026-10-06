@@ -89,6 +89,7 @@ import {
   formatTimeLabel,
 } from "@/lib/utils";
 import { CallStatus } from "@prisma/client";
+import { useSelectedStoreDomain } from "@/components/dashboard/stores-context";
 
 function formatScheduledWhen(scheduledCallAt: string | null): string | null {
   if (!scheduledCallAt) return null;
@@ -378,7 +379,7 @@ function CheckoutRow({
 }
 
 export function AbandonedCheckoutsPanel() {
-  const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
+  const selectedStoreDomain = useSelectedStoreDomain();
   const callLogs = useAnalyticsStore((s) => s.callLogs);
   const [checkouts, setCheckouts] = useState<AbandonedCheckoutRow[]>([]);
   const [completedCheckouts, setCompletedCheckouts] = useState<

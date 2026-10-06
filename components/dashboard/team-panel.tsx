@@ -2,19 +2,15 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Loader2, Mail, Trash2, UserMinus, UserPlus, Users } from "lucide-react";
+import { Loader2, Trash2, UserMinus, UserPlus, Users } from "lucide-react";
 import {
-  acceptStoreInvite,
   createStoreInvite,
-  declineStoreInvite,
   getStoreTeam,
-  listPendingInvitesForMe,
   removeStoreMember,
   revokeStoreInvite,
-  type PendingInviteForMeRow,
   type StoreTeamView,
 } from "@/app/actions/store-team";
-import { useAnalyticsStore } from "@/store/use-analytics-store";
+import { IncomingInvites } from "@/components/dashboard/incoming-invites";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +23,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { InlineSpinner } from "@/components/dashboard/page-spinner";
+import { useSelectedStoreDomain } from "@/components/dashboard/stores-context";
 
 function storeDisplayName(domain: string): string {
   return domain.replace(/\.myshopify\.com$/i, "") || domain;
@@ -38,117 +35,6 @@ function formatRelativeExpiry(expiresAtIso: string): string {
   const days = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
   if (days <= 1) return "Expires today";
   return `Expires in ${days} days`;
-}
-
-function PendingInviteRow({
-  invite,
-  onDone,
-}: {
-  invite: PendingInviteForMeRow;
-  onDone: () => void;
-}) {
-  const [isPending, startTransition] = useTransition();
-
-  function respond(action: "accept" | "decline") {
-    startTransition(async () => {
-      const result =
-        action === "accept"
-          ? await acceptStoreInvite(invite.id)
-          : await declineStoreInvite(invite.id);
-
-      if (!result.success) {
-        toast.error(result.error ?? "Something went wrong");
-        return;
-      }
-
-      toast.success(
-        action === "accept"
-          ? `You now have access to ${storeDisplayName(invite.storeDomain)}`
-          : "Invite declined"
-      );
-      onDone();
-    });
-  }
-
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-4 py-3">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium">
-          {invite.storeName || storeDisplayName(invite.storeDomain)}
-        </p>
-        <p className="truncate text-xs text-muted-foreground">
-          {invite.invitedByEmail
-            ? `Invited by ${invite.invitedByEmail}`
-            : "Invited to collaborate"}{" "}
-          · {formatRelativeExpiry(invite.expiresAt)}
-        </p>
-      </div>
-      <div className="flex shrink-0 gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={isPending}
-          onClick={() => respond("decline")}
-        >
-          Decline
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          disabled={isPending}
-          onClick={() => respond("accept")}
-        >
-          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-          Accept
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function PendingInvitesForMe() {
-  const [invites, setInvites] = useState<PendingInviteForMeRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const load = useCallback(() => {
-    listPendingInvitesForMe().then((rows) => {
-      setInvites(rows);
-      setIsLoading(false);
-    });
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  if (isLoading) {
-    return <InlineSpinner />;
-  }
-
-  if (invites.length === 0) return null;
-
-  return (
-    <Card className="border-border/60">
-      <CardHeader className="pb-3">
-        <div className="flex items-center gap-2">
-          <Mail className="h-4 w-4 text-muted-foreground" />
-          <CardTitle className="text-base font-semibold">
-            Pending invites for you
-          </CardTitle>
-          <Badge variant="info">{invites.length}</Badge>
-        </div>
-        <CardDescription className="text-xs">
-          Someone invited you to help manage their store.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        {invites.map((invite) => (
-          <PendingInviteRow key={invite.id} invite={invite} onDone={load} />
-        ))}
-      </CardContent>
-    </Card>
-  );
 }
 
 function InviteForm({
@@ -367,11 +253,11 @@ function StoreTeamCard({ storeDomain }: { storeDomain: string }) {
 }
 
 export function TeamPanel() {
-  const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
+  const selectedStoreDomain = useSelectedStoreDomain();
 
   return (
     <div className="space-y-6">
-      <PendingInvitesForMe />
+      <IncomingInvites />
 
       {selectedStoreDomain ? (
         <StoreTeamCard storeDomain={selectedStoreDomain} />

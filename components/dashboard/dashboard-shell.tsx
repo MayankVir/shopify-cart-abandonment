@@ -8,6 +8,7 @@ import {
   NavPendingProvider,
   PendingPageSlot,
 } from "@/components/dashboard/nav-pending";
+import { StoresProvider } from "@/components/dashboard/stores-context";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 
 import type { SidebarAccountSummary } from "@/components/dashboard/sidebar-user";
@@ -19,19 +20,17 @@ const PREFETCH_MAIN = [
   "/dashboard/logs",
   "/dashboard/billing",
   "/dashboard/onboarding",
-  "/dashboard/team",
 ];
 
-const PREFETCH_ADMIN = [
-  ...PREFETCH_MAIN,
-  "/dashboard/admin",
-  "/dashboard/drafts",
-];
+const PREFETCH_LIMITED = ["/dashboard/welcome", "/dashboard/onboarding"];
 
 interface DashboardShellProps {
   children: React.ReactNode;
   stores: Awaited<ReturnType<typeof getStoresForDashboard>>;
   showAdminLink?: boolean;
+  hasWorkspace?: boolean;
+  canSeeTeamAndDrafts?: boolean;
+  onboardingSkipped?: boolean;
   account: SidebarAccountSummary | null;
   pendingInviteCount?: number;
 }
@@ -40,16 +39,32 @@ export function DashboardShell({
   children,
   stores,
   showAdminLink = false,
+  hasWorkspace = false,
+  canSeeTeamAndDrafts = false,
+  onboardingSkipped = false,
   account,
   pendingInviteCount = 0,
 }: DashboardShellProps) {
+  const locked = !hasWorkspace && !showAdminLink;
+  const prefetchHrefs = locked
+    ? PREFETCH_LIMITED
+    : [
+        ...PREFETCH_MAIN,
+        ...(canSeeTeamAndDrafts
+          ? ["/dashboard/team", "/dashboard/drafts"]
+          : []),
+        ...(showAdminLink ? ["/dashboard/admin"] : []),
+      ];
+
   return (
+    <StoresProvider firstStoreDomain={stores[0]?.storeDomain ?? null}>
     <SidebarProvider>
-      <NavPendingProvider
-        prefetchHrefs={showAdminLink ? PREFETCH_ADMIN : PREFETCH_MAIN}
-      >
+      <NavPendingProvider prefetchHrefs={prefetchHrefs}>
         <AppSidebar
           showAdminLink={showAdminLink}
+          hasWorkspace={hasWorkspace}
+          canSeeTeamAndDrafts={canSeeTeamAndDrafts}
+          onboardingSkipped={onboardingSkipped}
           account={account}
           pendingInviteCount={pendingInviteCount}
         />
@@ -64,5 +79,6 @@ export function DashboardShell({
         </SidebarInset>
       </NavPendingProvider>
     </SidebarProvider>
+    </StoresProvider>
   );
 }

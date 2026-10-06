@@ -9,7 +9,6 @@ import {
 } from "@/app/actions/draft-sheet";
 import type { DraftSheetInspection } from "@/lib/draft-sheet";
 import type { SheetsWriteVerifyResult } from "@/lib/google-sheets";
-import { useAnalyticsStore } from "@/store/use-analytics-store";
 import { useDraftSheetRun } from "@/store/use-draft-sheet-run";
 import { useFeedbackSheetRun } from "@/store/use-feedback-sheet-run";
 import { Badge } from "@/components/ui/badge";
@@ -17,9 +16,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useSelectedStoreDomain } from "@/components/dashboard/stores-context";
 
 export function DraftSheetPanel() {
-  const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
+  const selectedStoreDomain = useSelectedStoreDomain();
   const [sheetUrl, setSheetUrl] = useState("");
   const [inspection, setInspection] = useState<DraftSheetInspection | null>(null);
   const [inspectError, setInspectError] = useState<string | null>(null);

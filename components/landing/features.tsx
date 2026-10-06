@@ -194,7 +194,7 @@ export function Features() {
               className="pointer-events-none absolute inset-0 size-full [mask-image:radial-gradient(circle_at_center,black,transparent_70%)]"
               squareSize={3}
               gridGap={5}
-              color="hsl(var(--primary))"
+              color="var(--primary)"
               maxOpacity={0.35}
               flickerChance={0.2}
             />
