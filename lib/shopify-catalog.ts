@@ -15,7 +15,7 @@ export function mergeStoreCatalog(
     existing && typeof existing === "object" && !Array.isArray(existing)
       ? { ...(existing as Record<string, Prisma.JsonValue>) }
       : {};
-  return { ...base, catalog };
+  return { ...base, catalog } as unknown as Prisma.InputJsonValue;
 }
 
 /** Writes bestsellers only after the products query succeeds. A missing scope throws and leaves the store unchanged. */
