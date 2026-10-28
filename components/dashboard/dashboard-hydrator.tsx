@@ -1,17 +1,21 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   getCheckoutLogsForStore,
   getStoresForDashboard,
 } from "@/app/actions/store";
+import { isActiveCall } from "@/lib/call-status";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import { useAnalyticsStore } from "@/store/use-analytics-store";
 
 interface DashboardHydratorProps {
   initialStores: Awaited<ReturnType<typeof getStoresForDashboard>>;
 }
 
-const CALL_LOG_POLL_MS = 30_000;
+/** Poll quickly only while a call is in flight; otherwise stay quiet. */
+const CALL_LOG_POLL_ACTIVE_MS = 30_000;
+const CALL_LOG_POLL_IDLE_MS = 120_000;
 
 export function DashboardHydrator({ initialStores }: DashboardHydratorProps) {
   const setSelectedStoreDomain = useAnalyticsStore(
@@ -19,6 +23,10 @@ export function DashboardHydrator({ initialStores }: DashboardHydratorProps) {
   );
   const selectedStoreDomain = useAnalyticsStore((s) => s.selectedStoreDomain);
   const setCallLogs = useAnalyticsStore((s) => s.setCallLogs);
+  const hasActiveCall = useAnalyticsStore((s) =>
+    s.callLogs.some((log) => isActiveCall(log.callStatus))
+  );
+  const activeDomain = useRef<string | null>(null);
 
   useEffect(() => {
     if (!selectedStoreDomain && initialStores[0]) {
@@ -26,30 +34,35 @@ export function DashboardHydrator({ initialStores }: DashboardHydratorProps) {
     }
   }, [initialStores, selectedStoreDomain, setSelectedStoreDomain]);
 
-  useEffect(() => {
-    if (!selectedStoreDomain) return;
-
-    let active = true;
-
-    async function loadLogs() {
-      try {
-        const logs = await getCheckoutLogsForStore(selectedStoreDomain!);
-        if (active) {
-          setCallLogs(Array.isArray(logs) ? logs : []);
-        }
-      } catch (error) {
-        console.error("Failed to load checkout logs:", error);
+  const loadLogs = useCallback(async () => {
+    const domain = selectedStoreDomain;
+    if (!domain) return;
+    try {
+      const logs = await getCheckoutLogsForStore(domain);
+      // Ignore a late response if the user switched stores meanwhile.
+      if (activeDomain.current === domain) {
+        setCallLogs(Array.isArray(logs) ? logs : []);
       }
+    } catch (error) {
+      console.error("Failed to load checkout logs:", error);
     }
-
-    loadLogs();
-    const interval = setInterval(loadLogs, CALL_LOG_POLL_MS);
-
-    return () => {
-      active = false;
-      clearInterval(interval);
-    };
   }, [selectedStoreDomain, setCallLogs]);
+
+  // Initial load when the store changes.
+  useEffect(() => {
+    activeDomain.current = selectedStoreDomain;
+    void loadLogs();
+  }, [selectedStoreDomain, loadLogs]);
+
+  // Background refresh: paused while the tab is hidden.
+  useVisibleInterval(
+    loadLogs,
+    selectedStoreDomain
+      ? hasActiveCall
+        ? CALL_LOG_POLL_ACTIVE_MS
+        : CALL_LOG_POLL_IDLE_MS
+      : null
+  );
 
   return null;
 }

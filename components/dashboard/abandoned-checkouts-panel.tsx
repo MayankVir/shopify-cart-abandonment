@@ -914,6 +914,7 @@ export function AbandonedCheckoutsPanel() {
     if (!selectedStoreDomain || !shouldLiveRefreshOpenCheckouts) return;
 
     const interval = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       void refreshOpenCheckouts({ silent: true });
     }, 30_000);
 
@@ -927,7 +928,9 @@ export function AbandonedCheckoutsPanel() {
   useEffect(() => {
     if (!selectedStoreDomain || !autoCallsEnabled) return;
 
+    // The server cron also syncs every 5 min, so a hidden tab can skip it.
     const interval = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       runSync();
     }, 5 * 60 * 1000);
 

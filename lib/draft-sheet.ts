@@ -116,7 +116,7 @@ export async function inspectDraftSheet(
   const headerResult = await tryFetchCsv(headerUrl);
   if (!headerResult.ok) {
     throw new Error(
-      "Could not read sheet headers. Share the sheet as \"Anyone with the link can view\" or publish it to the web."
+      `Could not read sheet headers: ${headerResult.reason}. Share the sheet as "Anyone with the link can view" or publish it to the web.`
     );
   }
 
@@ -176,7 +176,7 @@ async function fetchSheetRecords(
     const url = sheetGvizRangeUrl(parsed.spreadsheetId, parsed.gid, "A1:CZ20000");
     const result = await tryFetchCsv(url);
     if (!result.ok) {
-      throw new Error("Could not read sheet rows");
+      throw new Error(`Could not read sheet rows: ${result.reason}`);
     }
     rows = parseCsv(result.text);
   }

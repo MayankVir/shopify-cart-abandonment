@@ -145,7 +145,7 @@ export async function syncNdrcOrdersFromSheet(
   const result = await tryFetchCsv(url);
   if (!result.ok) {
     throw new Error(
-      'Could not read the NDRC sheet. Make sure it is shared as "Anyone with the link can view" or published to the web.'
+      `Could not read the NDRC sheet: ${result.reason}. It must be shared as "Anyone with the link can view" or published to the web.`
     );
   }
 

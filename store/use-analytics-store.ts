@@ -109,6 +109,22 @@ function computeMetricsFromLogs(logs: CallLogEntry[]): AnalyticsMetrics {
   );
 }
 
+function callLogsUnchanged(
+  current: CallLogEntry[],
+  next: CallLogEntry[],
+): boolean {
+  if (current.length !== next.length) return false;
+  return current.every((log, index) => {
+    const other = next[index];
+    return (
+      log.id === other.id &&
+      log.updatedAt === other.updatedAt &&
+      log.callStatus === other.callStatus &&
+      log.attemptCount === other.attemptCount
+    );
+  });
+}
+
 export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
   selectedStoreDomain: null,
   metrics: { ...INITIAL_METRICS },
@@ -129,6 +145,10 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
 
   setCallLogs: (logs) => {
     const callLogs = logs ?? [];
+    // Polling returns a fresh array every time. If nothing changed, keep the
+    // existing reference so subscribers (and the checkout refetch they
+    // trigger) do not run again.
+    if (callLogsUnchanged(get().callLogs, callLogs)) return;
     set({
       callLogs,
       metrics: computeMetricsFromLogs(

@@ -242,7 +242,7 @@ export async function fetchSheetDataRowCount(sheetUrl: string): Promise<number> 
   const result = await tryFetchCsv(url);
   if (!result.ok) {
     throw new Error(
-      "Could not read sheet row count. Make sure the sheet is shared as \"Anyone with the link can view\" or published to the web."
+      `Could not read sheet row count: ${result.reason}. The sheet must be shared as "Anyone with the link can view" or published to the web.`
     );
   }
 
@@ -293,7 +293,7 @@ export async function fetchSheetCsvPage(
   }
 
   throw new Error(
-    `Could not fetch sheet range ${range}. Make sure the sheet is shared as "Anyone with the link can view" or published to the web.`
+    `Could not fetch sheet range ${range}: ${result.reason}. The sheet must be shared as "Anyone with the link can view" or published to the web.`
   );
 }
 
@@ -641,7 +641,35 @@ export function parseSheetRow(
   };
 }
 
-export async function tryFetchCsv(url: string): Promise<{ ok: boolean; text: string; status: number }> {
+export type SheetFetchResult = {
+  ok: boolean;
+  text: string;
+  status: number;
+  /** Why the fetch failed, for error messages. Empty when ok. */
+  reason: string;
+};
+
+function describeSheetFetchFailure(
+  status: number,
+  isHtml: boolean,
+  networkError?: unknown
+): string {
+  if (networkError) {
+    const name = networkError instanceof Error ? networkError.name : "";
+    return name === "TimeoutError" || name === "AbortError"
+      ? "request to Google timed out"
+      : "could not reach Google (network error)";
+  }
+  if (status === 429) return "Google rate-limited the request (HTTP 429), try again later";
+  if (status === 400) return "Google rejected the request (HTTP 400): check the tab/gid in the URL";
+  if (status === 401 || status === 403) return `Google denied access (HTTP ${status})`;
+  if (status === 404) return "sheet not found (HTTP 404): it may be deleted or the URL is wrong";
+  if (status >= 500) return `Google returned a server error (HTTP ${status})`;
+  if (isHtml) return "Google returned a sign-in/access page instead of data (sheet is not public)";
+  return `unexpected response (HTTP ${status})`;
+}
+
+export async function tryFetchCsv(url: string): Promise<SheetFetchResult> {
   try {
     const response = await fetch(url, {
       headers: { Accept: "text/csv,text/plain,*/*" },
@@ -651,9 +679,20 @@ export async function tryFetchCsv(url: string): Promise<{ ok: boolean; text: str
     });
     const text = await response.text();
     const isHtml = text.trimStart().startsWith("<");
-    return { ok: response.ok && !isHtml, text, status: response.status };
-  } catch {
-    return { ok: false, text: "", status: 0 };
+    const ok = response.ok && !isHtml;
+    return {
+      ok,
+      text,
+      status: response.status,
+      reason: ok ? "" : describeSheetFetchFailure(response.status, isHtml),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      text: "",
+      status: 0,
+      reason: describeSheetFetchFailure(0, false, error),
+    };
   }
 }
 
@@ -878,7 +917,7 @@ async function fetchSheetColumnValues(sheetUrl: string, column: string): Promise
   const result = await tryFetchCsv(url);
   if (!result.ok) {
     throw new Error(
-      `Could not read sheet column ${column}. Make sure the sheet is shared as "Anyone with the link can view" or published to the web.`
+      `Could not read sheet column ${column}: ${result.reason}. The sheet must be shared as "Anyone with the link can view" or published to the web.`
     );
   }
   return columnCells(result.text);
@@ -922,7 +961,7 @@ async function fetchSheetRowRange(
   const result = await tryFetchCsv(url);
   if (!result.ok) {
     throw new Error(
-      `Could not fetch sheet range ${range}. Make sure the sheet is shared as "Anyone with the link can view" or published to the web.`
+      `Could not fetch sheet range ${range}: ${result.reason}. The sheet must be shared as "Anyone with the link can view" or published to the web.`
     );
   }
   return parseSheetCsv(result.text, { dataOnly: true, timeZone });

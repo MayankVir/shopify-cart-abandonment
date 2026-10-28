@@ -350,8 +350,9 @@ export function NdrcPanel() {
     if (!selectedStoreDomain || !hasActiveCalls) return;
 
     const interval = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       void refreshOrders({ silent: true });
-    }, 5_000);
+    }, 10_000);
 
     return () => clearInterval(interval);
   }, [selectedStoreDomain, hasActiveCalls, refreshOrders]);

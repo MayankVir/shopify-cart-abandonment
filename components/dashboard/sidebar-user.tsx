@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useClerk, useUser } from "@clerk/nextjs";
 import { LogOut, Settings, Loader2, UserRound } from "lucide-react";
 import { refreshMerchantCreditBalance } from "@/app/actions/billing";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,25 +50,25 @@ export function SidebarUser({ account }: SidebarUserProps) {
     setMinutes(account?.creditBalanceMinutes ?? 0);
   }, [account?.creditBalanceMinutes]);
 
+  const refreshBalance = useCallback(() => {
+    refreshMerchantCreditBalance()
+      .then((balance) => {
+        if (typeof balance === "number" && Number.isFinite(balance)) {
+          setMinutes(balance);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to refresh merchant credit balance:", error);
+      });
+  }, []);
+
   useEffect(() => {
-    if (!isLoaded) return;
+    if (isLoaded) refreshBalance();
+  }, [isLoaded, refreshBalance]);
 
-    const refresh = () => {
-      refreshMerchantCreditBalance()
-        .then((balance) => {
-          if (typeof balance === "number" && Number.isFinite(balance)) {
-            setMinutes(balance);
-          }
-        })
-        .catch((error) => {
-          console.error("Failed to refresh merchant credit balance:", error);
-        });
-    };
-
-    refresh();
-    const id = setInterval(refresh, 30_000);
-    return () => clearInterval(id);
-  }, [isLoaded]);
+  // Balance only changes after calls/top-ups. Check rarely, and never while
+  // the tab is hidden.
+  useVisibleInterval(refreshBalance, isLoaded ? 5 * 60 * 1000 : null);
 
   if (!isLoaded) {
     return (
