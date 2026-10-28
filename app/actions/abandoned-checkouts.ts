@@ -189,6 +189,12 @@ export interface CheckoutListResult {
 export interface SyncOptions {
   shopifyAfter?: string | null;
   sheetPage?: number;
+  /**
+   * Skip loading the open/completed checkout lists after syncing. The cron
+   * does not render a list, and loading up to 700 rows every run is a large
+   * share of database egress.
+   */
+  skipListing?: boolean;
 }
 
 /** List polls omit transcript and tool-call JSON. The drawer loads those on open. */
@@ -344,6 +350,25 @@ async function fetchCompletedCheckouts(storeDomain: string, timing?: TimingLog) 
     : checkouts.map(toRow);
 }
 
+/** Loads the UI lists after a sync, or empty lists when the caller (cron) does not need them. */
+async function loadCheckoutListing(
+  storeDomain: string,
+  skip: boolean | undefined,
+  timing?: TimingLog,
+) {
+  if (skip) {
+    return {
+      listResult: { checkouts: [] as Awaited<ReturnType<typeof fetchOpenCheckouts>>["checkouts"], totalCount: 0 },
+      completedCheckouts: [] as Awaited<ReturnType<typeof fetchCompletedCheckouts>>,
+    };
+  }
+  const [listResult, completedCheckouts] = await Promise.all([
+    fetchOpenCheckouts(storeDomain, timing),
+    fetchCompletedCheckouts(storeDomain, timing),
+  ]);
+  return { listResult, completedCheckouts };
+}
+
 export async function getAbandonedCheckoutsForStore(
   storeDomain: string
 ): Promise<CheckoutListResult> {
@@ -436,10 +461,11 @@ export async function syncAbandonedCheckoutsForStore(
         { page: sheetPage },
         timing,
       );
-      const [listResult, completedCheckouts] = await Promise.all([
-        fetchOpenCheckouts(storeDomain, timing),
-        fetchCompletedCheckouts(storeDomain, timing),
-      ]);
+      const { listResult, completedCheckouts } = await loadCheckoutListing(
+        storeDomain,
+        options.skipListing,
+        timing,
+      );
 
       console.info(
         "[sheet] abandoned checkouts synced",
@@ -619,10 +645,11 @@ export async function syncAbandonedCheckoutsForStore(
     }
     timing?.add("shopify-upsert", Date.now() - upsertStarted);
 
-    const [listResult, completedCheckouts] = await Promise.all([
-      fetchOpenCheckouts(storeDomain, timing),
-      fetchCompletedCheckouts(storeDomain, timing),
-    ]);
+    const { listResult, completedCheckouts } = await loadCheckoutListing(
+      storeDomain,
+      options.skipListing,
+      timing,
+    );
     const tokenCache = getCachedAdminTokenInfo(storeDomain);
 
     return {
@@ -1835,7 +1862,9 @@ export async function runAutoCallCron(): Promise<{
       store.autoCallsEnabled &&
       store.checkoutSyncMode !== CheckoutSyncMode.WEBHOOK
     ) {
-      const syncResult = await syncAbandonedCheckoutsForStore(store);
+      const syncResult = await syncAbandonedCheckoutsForStore(store, {
+        skipListing: true,
+      });
       syncOk = syncResult.success;
       if (syncResult.success) synced += 1;
       else errors += 1;
